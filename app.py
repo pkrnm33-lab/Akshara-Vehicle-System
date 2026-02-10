@@ -66,7 +66,7 @@ else:
         st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx", mime="application/vnd.ms-excel")
 
         # Edit/Delete Section
-        with st.expander("📝 Edit/Delete Driver Records"):
+        with st.expander("📝 Edit or Delete Driver Records"):
             selected_plate = st.selectbox("Select Vehicle", ["None"] + df['plate'].tolist())
             if selected_plate != "None":
                 v_idx = df[df['plate'] == selected_plate].index[0]
@@ -76,4 +76,35 @@ else:
                     save_data(df)
                     st.success("Details Updated!")
                     st.rerun()
-                if st.button
+                if st.button("🗑️ Permanently Delete Vehicle"):
+                    df = df[df['plate'] != selected_plate]
+                    save_data(df)
+                    st.success("Vehicle Removed!")
+                    st.rerun()
+
+        # Add New Vehicle
+        with st.expander("➕ Enroll New Vehicle"):
+            p = st.text_input("Plate No").upper()
+            d = st.text_input("Driver Name").lower()
+            if st.button("Enroll Vehicle"):
+                if p and d:
+                    new_row = {"plate": p, "driver": d, "odo": 0, "trip_km": 0, "fuel_liters": 0, "last_updated": "N/A"}
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                    save_data(df)
+                    st.success("Vehicle Enrolled!")
+                    st.rerun()
+
+        st.subheader("Live Status & Mileage Alerts")
+        # Calculate Average for Display
+        df['AVG (km/l)'] = df.apply(lambda r: round(float(r['trip_km'])/float(r['fuel_liters']), 2) if float(r['fuel_liters']) > 0 else 0.0, axis=1)
+        
+        # Highlight low mileage in Red
+        def color_low_mileage(val):
+            color = 'red' if (isinstance(val, (int, float)) and 0 < val < 5) else 'white'
+            return f'color: {color}'
+        
+        st.dataframe(df.style.applymap(color_low_mileage, subset=['AVG (km/l)']), use_container_width=True)
+
+    # --- DRIVER VIEW ---
+    else:
+        st.header(f"Driver Portal: {st.session_state.user.upper()}")
