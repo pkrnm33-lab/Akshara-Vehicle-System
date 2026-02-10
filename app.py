@@ -78,17 +78,12 @@ else:
 
         st.header("Manager Control Panel")
         
-        # --- NEW: SEND MESSAGE BAR ---
         with st.expander("📢 Send Message to All Drivers"):
             current_msg = get_manager_msg()
             new_msg = st.text_area("Type your message here:", value=current_msg)
-            col1, col2 = st.columns(2)
-            if col1.button("Send/Update Message"):
+            if st.button("Send Message"):
                 set_manager_msg(new_msg)
-                st.success("Message sent to all drivers!")
-                st.rerun()
-            if col2.button("Clear Message"):
-                set_manager_msg("")
+                st.success("Message updated!")
                 st.rerun()
 
         df = load_data(DATA_FILE)
@@ -118,7 +113,7 @@ else:
                     save_data(df, DATA_FILE)
                     st.rerun()
 
-        # Enroll New
+        # Enroll Section
         with st.expander("➕ Enroll New Vehicle/Driver"):
             p = st.text_input("Plate No").upper()
             d = st.text_input("Driver Name").lower()
@@ -129,7 +124,8 @@ else:
                     save_data(df, DATA_FILE)
                     st.rerun()
 
-        st.subheader("Live Vehicle Status")
+        st.subheader("Live Vehicle Status Table")
+        # --- RE-ADDED MILEAGE CALCULATION ---
         df['AVG (km/l)'] = df.apply(lambda r: round(float(r['trip_km'])/float(r['fuel_liters']), 2) if float(r['fuel_liters']) > 0 else 0.0, axis=1)
         st.dataframe(df, use_container_width=True)
 
@@ -145,10 +141,16 @@ else:
             v_idx = v_idx_list[0]
             v_data = df.iloc[v_idx]
 
-            # Display Stats
-            col1, col2 = st.columns(2)
-            col1.metric("Current Odometer", f"{v_data['odo']} km")
-            col2.metric("Trip KM Since Fuel", f"{v_data['trip_km']} km")
+            # --- MILEAGE FOR DRIVER ---
+            try:
+                trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
+                avg = round(trip / fuel, 2) if fuel > 0 else 0.0
+            except: avg = 0.0
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Odometer", f"{v_data['odo']} km")
+            col2.metric("Trip KM", f"{v_data['trip_km']} km")
+            col3.metric("Mileage", f"{avg} km/l") # Re-added here
 
             # Entry
             new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
