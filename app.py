@@ -65,7 +65,6 @@ if not st.session_state.logged_in:
             else:
                 st.error("User not found.")
 else:
-    # --- MANAGER VIEW ---
     if st.session_state.role == "manager":
         st.sidebar.title("Manager Menu")
         if st.sidebar.button("Logout"):
@@ -115,23 +114,26 @@ else:
         hist_df = load_data(HISTORY_FILE)
         st.dataframe(hist_df.head(10), use_container_width=True)
 
-    # --- DRIVER VIEW ---
     else:
         st.header(f"Driver Portal: {st.session_state.user.upper()}")
         df = load_data(DATA_FILE)
         v_idx = df[df['driver'].str.lower() == st.session_state.user].index[0]
         v_data = df.iloc[v_idx]
 
-        # --- RE-ADDED MILEAGE COLUMN ---
+        # --- CALCULATIONS ---
         try:
-            trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
-            current_avg = round(trip / fuel, 2) if fuel > 0 else 0.0
-        except: current_avg = 0.0
+            trip_km = float(v_data['trip_km'])
+            fuel = float(v_data['fuel_liters'])
+            current_avg = round(trip_km / fuel, 2) if fuel > 0 else 0.0
+        except: 
+            trip_km, current_avg = 0.0, 0.0
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Vehicle", v_data['plate'])
-        col2.metric("Odometer", f"{v_data['odo']} km")
-        col3.metric("Mileage Average", f"{current_avg} km/l")
+        # --- METRICS DISPLAY ---
+        col1, col2 = st.columns(2)
+        col1.metric("Current Odometer", f"{v_data['odo']} km")
+        col2.metric("KM Run After Fueling", f"{trip_km} km") # Added this metric
+        
+        st.metric("Current Mileage Average", f"{current_avg} km/l")
 
         if current_avg > 0:
             if current_avg < 5:
@@ -140,7 +142,7 @@ else:
                 st.success(f"✅ Good Efficiency: {current_avg} km/l")
 
         st.divider()
-        new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
+        new_odo = st.number_input("Enter New Odometer Reading", min_value=float(v_data['odo']), step=1.0)
         if st.button("Update Odometer"):
             diff = new_odo - float(v_data['odo'])
             df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
@@ -159,7 +161,7 @@ else:
             df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
             save_data(df, DATA_FILE)
             add_history(v_data['plate'], st.session_state.user, v_data['odo'], 0, fuel_qty)
-            st.success("Fuel Logged!")
+            st.success("Fuel Logged! KM After Fueling reset to 0.")
             st.rerun()
 
         if st.button("Logout"):
