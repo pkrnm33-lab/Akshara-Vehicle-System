@@ -34,7 +34,7 @@ def add_history(plate, driver, odo, trip, fuel):
         "fuel_liters": fuel
     }
     hist_df = pd.concat([pd.DataFrame([new_entry]), hist_df], ignore_index=True)
-    save_data(hist_df.head(50), HISTORY_FILE) # Keep last 50 entries
+    save_data(hist_df.head(50), HISTORY_FILE)
 
 # --- App Header ---
 st.markdown("<h1 style='text-align: center;'>AKSHARA PUBLIC SCHOOL</h1>", unsafe_allow_html=True)
@@ -81,7 +81,7 @@ else:
             df.to_excel(writer, index=False)
         st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx")
 
-        # Reset KM Option
+        # Reset Records
         with st.expander("🗑️ Reset KM/Fuel Records"):
             reset_plate = st.selectbox("Select Vehicle", ["None"] + df['plate'].tolist())
             if reset_plate != "None":
@@ -121,9 +121,25 @@ else:
         df = load_data(DATA_FILE)
         v_idx = df[df['driver'].str.lower() == st.session_state.user].index[0]
         v_data = df.iloc[v_idx]
-        
-        st.info(f"**Vehicle:** {v_data['plate']} | **Current Odo:** {v_data['odo']} km")
-        
+
+        # --- RE-ADDED MILEAGE COLUMN ---
+        try:
+            trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
+            current_avg = round(trip / fuel, 2) if fuel > 0 else 0.0
+        except: current_avg = 0.0
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Vehicle", v_data['plate'])
+        col2.metric("Odometer", f"{v_data['odo']} km")
+        col3.metric("Mileage Average", f"{current_avg} km/l")
+
+        if current_avg > 0:
+            if current_avg < 5:
+                st.warning(f"⚠️ Low Efficiency: {current_avg} km/l")
+            else:
+                st.success(f"✅ Good Efficiency: {current_avg} km/l")
+
+        st.divider()
         new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
         if st.button("Update Odometer"):
             diff = new_odo - float(v_data['odo'])
@@ -136,8 +152,8 @@ else:
             st.rerun()
 
         st.divider()
-        fuel_qty = st.number_input("Diesel Refilled (L)", min_value=0.0)
-        if st.button("Refill & Reset Trip"):
+        fuel_qty = st.number_input("Diesel Refilled (Liters)", min_value=0.0)
+        if st.button("Log Fuel & Reset Trip"):
             df.at[v_idx, 'fuel_liters'] = fuel_qty
             df.at[v_idx, 'trip_km'] = 0
             df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
