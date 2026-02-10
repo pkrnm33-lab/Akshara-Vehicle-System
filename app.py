@@ -7,22 +7,18 @@ import io
 # --- Setup ---
 st.set_page_config(page_title="Akshara Vehicle System", layout="wide")
 DATA_FILE = "vehicle_data.csv"
-HISTORY_FILE = "vehicle_history.csv"
 MSG_FILE = "manager_msg.txt"
 
 # --- Data Handling ---
-def load_data(file):
-    if not os.path.exists(file):
-        if file == DATA_FILE:
-            df = pd.DataFrame(columns=["plate", "driver", "odo", "trip_km", "fuel_liters", "last_updated"])
-        else:
-            df = pd.DataFrame(columns=["timestamp", "plate", "driver", "odo", "trip_km", "fuel_liters"])
-        df.to_csv(file, index=False)
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        df = pd.DataFrame(columns=["plate", "driver", "odo", "trip_km", "fuel_liters", "last_updated"])
+        df.to_csv(DATA_FILE, index=False)
         return df
-    return pd.read_csv(file)
+    return pd.read_csv(DATA_FILE)
 
-def save_data(df, file):
-    df.to_csv(file, index=False)
+def save_data(df):
+    df.to_csv(DATA_FILE, index=False)
 
 def get_manager_msg():
     if os.path.exists(MSG_FILE):
@@ -31,8 +27,14 @@ def get_manager_msg():
     return ""
 
 def set_manager_msg(msg):
-    with open(MSG_FILE, "w") as f:
-        f.write(msg)
+    if msg.strip() == "":
+        if os.path.exists(MSG_FILE):
+            os.remove(MSG_FILE)
+    else:
+        timestamp = datetime.now().strftime("%I:%M %p, %d %b")
+        full_msg = f"{msg} (Updated: {timestamp})"
+        with open(MSG_FILE, "w") as f:
+            f.write(full_msg)
 
 # --- App Header ---
 st.markdown("<h1 style='text-align: center;'>AKSHARA PUBLIC SCHOOL</h1>", unsafe_allow_html=True)
@@ -60,7 +62,7 @@ if not st.session_state.logged_in:
             st.session_state.logged_in = True
             st.rerun()
         elif user_input != "":
-            df = load_data(DATA_FILE)
+            df = load_data()
             if user_input in df['driver'].str.lower().values:
                 st.session_state.role = "driver"
                 st.session_state.user = user_input
@@ -78,15 +80,23 @@ else:
 
         st.header("Manager Control Panel")
         
-        with st.expander("📢 Send Message to All Drivers"):
-            current_msg = get_manager_msg()
-            new_msg = st.text_area("Type your message here:", value=current_msg)
-            if st.button("Send Message"):
-                set_manager_msg(new_msg)
-                st.success("Message updated!")
+        # --- IMPROVED: EDIT & DELETE MESSAGE ---
+        with st.expander("📢 Edit or Delete Driver Message"):
+            current_raw_msg = get_manager_msg().split(" (Updated:")[0] # Gets just the text
+            msg_to_edit = st.text_area("Update your message below:", value=current_raw_msg)
+            
+            col1, col2 = st.columns(2)
+            if col1.button("✅ Update/Save Message"):
+                set_manager_msg(msg_to_edit)
+                st.success("Message updated for all drivers!")
+                st.rerun()
+            
+            if col2.button("🗑️ Delete Message Permanently"):
+                set_manager_msg("")
+                st.success("Message removed!")
                 st.rerun()
 
-        df = load_data(DATA_FILE)
+        df = load_data()
         
         # Download Excel
         buffer = io.BytesIO()
@@ -94,7 +104,7 @@ else:
             df.to_excel(writer, index=False)
         st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx")
 
-        # Management Section
+        # Management Sections
         with st.expander("🗑️ Delete Driver or Reset Records"):
             col_a, col_b = st.columns(2)
             with col_a:
@@ -104,35 +114,23 @@ else:
                     df.at[v_idx, 'odo'] = 0
                     df.at[v_idx, 'trip_km'] = 0
                     df.at[v_idx, 'fuel_liters'] = 0
-                    save_data(df, DATA_FILE)
+                    save_data(df)
                     st.rerun()
             with col_b:
                 del_driver = st.selectbox("Remove Driver Account", ["None"] + df['driver'].tolist())
                 if del_driver != "None" and st.button("Confirm Delete"):
                     df = df[df['driver'] != del_driver]
-                    save_data(df, DATA_FILE)
-                    st.rerun()
-
-        # Enroll Section
-        with st.expander("➕ Enroll New Vehicle/Driver"):
-            p = st.text_input("Plate No").upper()
-            d = st.text_input("Driver Name").lower()
-            if st.button("Enroll Now"):
-                if p and d:
-                    new_row = {"plate": p, "driver": d, "odo": 0, "trip_km": 0, "fuel_liters": 0, "last_updated": "N/A"}
-                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                    save_data(df, DATA_FILE)
+                    save_data(df)
                     st.rerun()
 
         st.subheader("Live Vehicle Status Table")
-        # --- RE-ADDED MILEAGE CALCULATION ---
         df['AVG (km/l)'] = df.apply(lambda r: round(float(r['trip_km'])/float(r['fuel_liters']), 2) if float(r['fuel_liters']) > 0 else 0.0, axis=1)
         st.dataframe(df, use_container_width=True)
 
     # --- DRIVER VIEW ---
     else:
         st.header(f"Driver Portal: {st.session_state.user.upper()}")
-        df = load_data(DATA_FILE)
+        df = load_data()
         v_idx_list = df[df['driver'].str.lower() == st.session_state.user].index
         
         if len(v_idx_list) == 0:
@@ -141,7 +139,6 @@ else:
             v_idx = v_idx_list[0]
             v_data = df.iloc[v_idx]
 
-            # --- MILEAGE FOR DRIVER ---
             try:
                 trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
                 avg = round(trip / fuel, 2) if fuel > 0 else 0.0
@@ -150,16 +147,15 @@ else:
             col1, col2, col3 = st.columns(3)
             col1.metric("Odometer", f"{v_data['odo']} km")
             col2.metric("Trip KM", f"{v_data['trip_km']} km")
-            col3.metric("Mileage", f"{avg} km/l") # Re-added here
+            col3.metric("Mileage", f"{avg} km/l")
 
-            # Entry
             new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
             if st.button("Update Odometer"):
                 diff = new_odo - float(v_data['odo'])
                 df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
                 df.at[v_idx, 'odo'] = new_odo
                 df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                save_data(df, DATA_FILE)
+                save_data(df)
                 st.success("Odometer updated!")
                 st.rerun()
 
@@ -169,8 +165,8 @@ else:
                 df.at[v_idx, 'fuel_liters'] = fuel_qty
                 df.at[v_idx, 'trip_km'] = 0
                 df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                save_data(df, DATA_FILE)
-                st.success("Fuel Logged! Trip KM reset.")
+                save_data(df)
+                st.success("Fuel Logged!")
                 st.rerun()
 
         if st.button("Logout"):
