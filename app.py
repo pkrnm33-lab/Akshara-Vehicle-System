@@ -11,7 +11,7 @@ DATA_FILE = "vehicle_data.csv"
 # --- Data Handling ---
 def load_data():
     if not os.path.exists(DATA_FILE):
-        df = pd.DataFrame(columns=["plate", "driver", "odo", "trip_km", "fuel_liters", "last_updated", "location"])
+        df = pd.DataFrame(columns=["plate", "driver", "odo", "trip_km", "fuel_liters", "last_updated"])
         df.to_csv(DATA_FILE, index=False)
         return df
     return pd.read_csv(DATA_FILE)
@@ -77,7 +77,7 @@ else:
                     st.success("Updated!")
                     st.rerun()
 
-        # --- NEW: DELETE SECTION ---
+        # Delete Section
         with st.expander("🗑️ Delete a Vehicle"):
             delete_plate = st.selectbox("Select Vehicle to Remove", ["None"] + df['plate'].tolist())
             if delete_plate != "None":
@@ -94,7 +94,7 @@ else:
             d = st.text_input("Driver Name").lower()
             if st.button("Enroll Vehicle"):
                 if p and d:
-                    new_row = {"plate": p, "driver": d, "odo": 0, "trip_km": 0, "fuel_liters": 0, "last_updated": "N/A", "location": "N/A"}
+                    new_row = {"plate": p, "driver": d, "odo": 0, "trip_km": 0, "fuel_liters": 0, "last_updated": "N/A"}
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                     save_data(df)
                     st.success("Vehicle Enrolled!")
@@ -114,13 +114,11 @@ else:
         
         # Update odometer
         new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
-        loc_input = st.text_input("Your Current Location")
 
         if st.button("Update Odometer"):
             diff = new_odo - float(v_data['odo'])
             df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
             df.at[v_idx, 'odo'] = new_odo
-            df.at[v_idx, 'location'] = loc_input if loc_input else "N/A"
             df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
             save_data(df)
             st.success("Data Updated!")
