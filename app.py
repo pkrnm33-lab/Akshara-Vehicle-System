@@ -8,6 +8,7 @@ import io
 st.set_page_config(page_title="Akshara Vehicle System", layout="wide")
 DATA_FILE = "vehicle_data.csv"
 HISTORY_FILE = "vehicle_history.csv"
+MSG_FILE = "manager_msg.txt"
 
 # --- Data Handling ---
 def load_data(file):
@@ -23,22 +24,25 @@ def load_data(file):
 def save_data(df, file):
     df.to_csv(file, index=False)
 
-def add_history(plate, driver, odo, trip, fuel):
-    hist_df = load_data(HISTORY_FILE)
-    new_entry = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "plate": plate,
-        "driver": driver,
-        "odo": odo,
-        "trip_km": trip,
-        "fuel_liters": fuel
-    }
-    hist_df = pd.concat([pd.DataFrame([new_entry]), hist_df], ignore_index=True)
-    save_data(hist_df.head(50), HISTORY_FILE)
+def get_manager_msg():
+    if os.path.exists(MSG_FILE):
+        with open(MSG_FILE, "r") as f:
+            return f.read()
+    return ""
+
+def set_manager_msg(msg):
+    with open(MSG_FILE, "w") as f:
+        f.write(msg)
 
 # --- App Header ---
 st.markdown("<h1 style='text-align: center;'>AKSHARA PUBLIC SCHOOL</h1>", unsafe_allow_html=True)
 st.markdown("<h3 style='text-align: center; font-size: 18px; color: gray;'>R.G ROAD, GANGAVATHI</h3>", unsafe_allow_html=True)
+
+# --- Driver Notification Bar ---
+announcement = get_manager_msg()
+if announcement:
+    st.warning(f"📢 **MANAGER MESSAGE:** {announcement}")
+
 st.divider()
 
 # --- Login Logic ---
@@ -73,6 +77,20 @@ else:
             st.rerun()
 
         st.header("Manager Control Panel")
+        
+        # --- NEW: SEND MESSAGE BAR ---
+        with st.expander("📢 Send Message to All Drivers"):
+            current_msg = get_manager_msg()
+            new_msg = st.text_area("Type your message here:", value=current_msg)
+            col1, col2 = st.columns(2)
+            if col1.button("Send/Update Message"):
+                set_manager_msg(new_msg)
+                st.success("Message sent to all drivers!")
+                st.rerun()
+            if col2.button("Clear Message"):
+                set_manager_msg("")
+                st.rerun()
+
         df = load_data(DATA_FILE)
         
         # Download Excel
@@ -81,36 +99,26 @@ else:
             df.to_excel(writer, index=False)
         st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx")
 
-        # --- NEW: DELETE DRIVER OPTION ---
+        # Management Section
         with st.expander("🗑️ Delete Driver or Reset Records"):
             col_a, col_b = st.columns(2)
-            
             with col_a:
-                st.write("### Reset KM Data")
-                reset_plate = st.selectbox("Select Vehicle to Reset", ["None"] + df['plate'].tolist(), key="reset_box")
-                if reset_plate != "None":
-                    if st.button("Confirm KM Reset"):
-                        v_idx = df[df['plate'] == reset_plate].index[0]
-                        df.at[v_idx, 'odo'] = 0
-                        df.at[v_idx, 'trip_km'] = 0
-                        df.at[v_idx, 'fuel_liters'] = 0
-                        df.at[v_idx, 'last_updated'] = "Reset by Manager"
-                        save_data(df, DATA_FILE)
-                        st.success(f"Records for {reset_plate} reset!")
-                        st.rerun()
-            
+                reset_plate = st.selectbox("Reset Vehicle KM", ["None"] + df['plate'].tolist())
+                if reset_plate != "None" and st.button("Confirm Reset"):
+                    v_idx = df[df['plate'] == reset_plate].index[0]
+                    df.at[v_idx, 'odo'] = 0
+                    df.at[v_idx, 'trip_km'] = 0
+                    df.at[v_idx, 'fuel_liters'] = 0
+                    save_data(df, DATA_FILE)
+                    st.rerun()
             with col_b:
-                st.write("### Delete Driver Account")
-                del_driver = st.selectbox("Select Driver to Remove", ["None"] + df['driver'].tolist(), key="del_box")
-                if del_driver != "None":
-                    st.warning(f"Permanently remove driver: {del_driver}?")
-                    if st.button("Confirm Delete Driver"):
-                        df = df[df['driver'] != del_driver]
-                        save_data(df, DATA_FILE)
-                        st.success(f"Driver {del_driver} has been deleted.")
-                        st.rerun()
+                del_driver = st.selectbox("Remove Driver Account", ["None"] + df['driver'].tolist())
+                if del_driver != "None" and st.button("Confirm Delete"):
+                    df = df[df['driver'] != del_driver]
+                    save_data(df, DATA_FILE)
+                    st.rerun()
 
-        # Enroll Section
+        # Enroll New
         with st.expander("➕ Enroll New Vehicle/Driver"):
             p = st.text_input("Plate No").upper()
             d = st.text_input("Driver Name").lower()
@@ -119,16 +127,11 @@ else:
                     new_row = {"plate": p, "driver": d, "odo": 0, "trip_km": 0, "fuel_liters": 0, "last_updated": "N/A"}
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                     save_data(df, DATA_FILE)
-                    st.success("Enrolled!")
                     st.rerun()
 
-        st.subheader("Live Vehicle Status Table")
+        st.subheader("Live Vehicle Status")
         df['AVG (km/l)'] = df.apply(lambda r: round(float(r['trip_km'])/float(r['fuel_liters']), 2) if float(r['fuel_liters']) > 0 else 0.0, axis=1)
         st.dataframe(df, use_container_width=True)
-
-        st.subheader("📜 Recent Activity History")
-        hist_df = load_data(HISTORY_FILE)
-        st.dataframe(hist_df.head(10), use_container_width=True)
 
     # --- DRIVER VIEW ---
     else:
@@ -137,33 +140,24 @@ else:
         v_idx_list = df[df['driver'].str.lower() == st.session_state.user].index
         
         if len(v_idx_list) == 0:
-            st.error("Account has been deleted or unassigned. Contact Manager.")
-            if st.button("Logout"):
-                st.session_state.logged_in = False
-                st.rerun()
+            st.error("Account missing. Contact Manager.")
         else:
             v_idx = v_idx_list[0]
             v_data = df.iloc[v_idx]
 
-            try:
-                trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
-                avg = round(trip / fuel, 2) if fuel > 0 else 0.0
-            except: avg = 0.0
-
+            # Display Stats
             col1, col2 = st.columns(2)
             col1.metric("Current Odometer", f"{v_data['odo']} km")
-            col2.metric("KM Since Last Fuel", f"{v_data['trip_km']} km")
-            st.metric("Mileage Average", f"{avg} km/l")
+            col2.metric("Trip KM Since Fuel", f"{v_data['trip_km']} km")
 
-            st.divider()
-            new_odo = st.number_input("Enter New Odometer Reading", min_value=float(v_data['odo']), step=1.0)
+            # Entry
+            new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
             if st.button("Update Odometer"):
                 diff = new_odo - float(v_data['odo'])
                 df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
                 df.at[v_idx, 'odo'] = new_odo
                 df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                 save_data(df, DATA_FILE)
-                add_history(v_data['plate'], st.session_state.user, new_odo, df.at[v_idx, 'trip_km'], v_data['fuel_liters'])
                 st.success("Odometer updated!")
                 st.rerun()
 
@@ -174,10 +168,9 @@ else:
                 df.at[v_idx, 'trip_km'] = 0
                 df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                 save_data(df, DATA_FILE)
-                add_history(v_data['plate'], st.session_state.user, v_data['odo'], 0, fuel_qty)
-                st.success("Fuel Logged!")
+                st.success("Fuel Logged! Trip KM reset.")
                 st.rerun()
 
-            if st.button("Logout"):
-                st.session_state.logged_in = False
-                st.rerun()
+        if st.button("Logout"):
+            st.session_state.logged_in = False
+            st.rerun()
