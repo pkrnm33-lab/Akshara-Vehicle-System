@@ -53,28 +53,30 @@ if 'logged_in' not in st.session_state:
 
 if not st.session_state.logged_in:
     st.subheader("Login Portal")
-    # Added both input fields here
     user_input = st.text_input("Username").lower().strip()
-    pwd_input = st.text_input("Password", type="password") # RE-ADDED PASSWORD COLUMN
+    
+    # Password field only appears if "manager" is typed
+    pwd_input = ""
+    if user_input == "manager":
+        pwd_input = st.text_input("Manager Password", type="password")
     
     if st.button("Login"):
-        if user_input == "manager" and pwd_input == "admin":
-            st.session_state.role = "manager"
-            st.session_state.logged_in = True
-            st.rerun()
+        if user_input == "manager":
+            if pwd_input == "admin":
+                st.session_state.role = "manager"
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Incorrect Manager Password")
         elif user_input != "":
             df = load_data()
             if user_input in df['driver'].str.lower().values:
-                # For now, drivers only need their name, but we check if they filled something in the password box
-                if pwd_input:
-                    st.session_state.role = "driver"
-                    st.session_state.user = user_input
-                    st.session_state.logged_in = True
-                    st.rerun()
-                else:
-                    st.error("Please enter your password.")
+                st.session_state.role = "driver"
+                st.session_state.user = user_input
+                st.session_state.logged_in = True
+                st.rerun()
             else:
-                st.error("User not found.")
+                st.error("User not found. Please contact Manager.")
 else:
     # --- MANAGER VIEW ---
     if st.session_state.role == "manager":
@@ -88,12 +90,11 @@ else:
 
         with st.expander("📢 Edit or Delete Driver Message"):
             current_raw_msg = get_manager_msg().split(" (Updated:")[0]
-            msg_to_edit = st.text_area("Update your message below:", value=current_raw_msg)
-            col1, col2 = st.columns(2)
-            if col1.button("✅ Update Message"):
+            msg_to_edit = st.text_area("Update message:", value=current_raw_msg)
+            if st.button("Update Message"):
                 set_manager_msg(msg_to_edit)
                 st.rerun()
-            if col2.button("🗑️ Delete Message"):
+            if st.button("Clear Message"):
                 set_manager_msg("")
                 st.rerun()
 
