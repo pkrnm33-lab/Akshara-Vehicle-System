@@ -67,7 +67,7 @@ else:
 
         # Edit Section
         with st.expander("📝 Edit Existing Driver/Vehicle"):
-            selected_plate = st.selectbox("Select Vehicle", df['plate'].tolist())
+            selected_plate = st.selectbox("Select Vehicle to Edit", df['plate'].tolist())
             if selected_plate:
                 v_idx = df[df['plate'] == selected_plate].index[0]
                 new_driver = st.text_input("Update Driver", value=df.at[v_idx, 'driver'])
@@ -75,6 +75,17 @@ else:
                     df.at[v_idx, 'driver'] = new_driver.lower()
                     save_data(df)
                     st.success("Updated!")
+                    st.rerun()
+
+        # --- NEW: DELETE SECTION ---
+        with st.expander("🗑️ Delete a Vehicle"):
+            delete_plate = st.selectbox("Select Vehicle to Remove", ["None"] + df['plate'].tolist())
+            if delete_plate != "None":
+                st.warning(f"Are you sure you want to permanently delete {delete_plate}?")
+                if st.button("Confirm Delete"):
+                    df = df[df['plate'] != delete_plate]
+                    save_data(df)
+                    st.success(f"Vehicle {delete_plate} removed.")
                     st.rerun()
 
         # Add Section
