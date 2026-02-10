@@ -79,96 +79,24 @@ else:
             st.rerun()
 
         st.header("Manager Control Panel")
-        
-        # --- IMPROVED: EDIT & DELETE MESSAGE ---
+        df = load_data()
+
+        # 1. Edit/Delete Message
         with st.expander("📢 Edit or Delete Driver Message"):
-            current_raw_msg = get_manager_msg().split(" (Updated:")[0] # Gets just the text
+            current_raw_msg = get_manager_msg().split(" (Updated:")[0]
             msg_to_edit = st.text_area("Update your message below:", value=current_raw_msg)
-            
             col1, col2 = st.columns(2)
             if col1.button("✅ Update/Save Message"):
                 set_manager_msg(msg_to_edit)
-                st.success("Message updated for all drivers!")
+                st.success("Message updated!")
                 st.rerun()
-            
-            if col2.button("🗑️ Delete Message Permanently"):
+            if col2.button("🗑️ Delete Message"):
                 set_manager_msg("")
                 st.success("Message removed!")
                 st.rerun()
 
-        df = load_data()
-        
-        # Download Excel
+        # 2. Excel Report
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=False)
-        st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx")
-
-        # Management Sections
-        with st.expander("🗑️ Delete Driver or Reset Records"):
-            col_a, col_b = st.columns(2)
-            with col_a:
-                reset_plate = st.selectbox("Reset Vehicle KM", ["None"] + df['plate'].tolist())
-                if reset_plate != "None" and st.button("Confirm Reset"):
-                    v_idx = df[df['plate'] == reset_plate].index[0]
-                    df.at[v_idx, 'odo'] = 0
-                    df.at[v_idx, 'trip_km'] = 0
-                    df.at[v_idx, 'fuel_liters'] = 0
-                    save_data(df)
-                    st.rerun()
-            with col_b:
-                del_driver = st.selectbox("Remove Driver Account", ["None"] + df['driver'].tolist())
-                if del_driver != "None" and st.button("Confirm Delete"):
-                    df = df[df['driver'] != del_driver]
-                    save_data(df)
-                    st.rerun()
-
-        st.subheader("Live Vehicle Status Table")
-        df['AVG (km/l)'] = df.apply(lambda r: round(float(r['trip_km'])/float(r['fuel_liters']), 2) if float(r['fuel_liters']) > 0 else 0.0, axis=1)
-        st.dataframe(df, use_container_width=True)
-
-    # --- DRIVER VIEW ---
-    else:
-        st.header(f"Driver Portal: {st.session_state.user.upper()}")
-        df = load_data()
-        v_idx_list = df[df['driver'].str.lower() == st.session_state.user].index
-        
-        if len(v_idx_list) == 0:
-            st.error("Account missing. Contact Manager.")
-        else:
-            v_idx = v_idx_list[0]
-            v_data = df.iloc[v_idx]
-
-            try:
-                trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
-                avg = round(trip / fuel, 2) if fuel > 0 else 0.0
-            except: avg = 0.0
-
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Odometer", f"{v_data['odo']} km")
-            col2.metric("Trip KM", f"{v_data['trip_km']} km")
-            col3.metric("Mileage", f"{avg} km/l")
-
-            new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
-            if st.button("Update Odometer"):
-                diff = new_odo - float(v_data['odo'])
-                df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
-                df.at[v_idx, 'odo'] = new_odo
-                df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                save_data(df)
-                st.success("Odometer updated!")
-                st.rerun()
-
-            st.divider()
-            fuel_qty = st.number_input("Diesel Refilled (Liters)", min_value=0.0)
-            if st.button("Log Fuel & Reset Trip"):
-                df.at[v_idx, 'fuel_liters'] = fuel_qty
-                df.at[v_idx, 'trip_km'] = 0
-                df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                save_data(df)
-                st.success("Fuel Logged!")
-                st.rerun()
-
-        if st.button("Logout"):
-            st.session_state.logged_in = False
-            st.rerun()
+        st.download_button(label="
