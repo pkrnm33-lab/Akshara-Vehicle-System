@@ -65,6 +65,7 @@ if not st.session_state.logged_in:
             else:
                 st.error("User not found.")
 else:
+    # --- MANAGER VIEW ---
     if st.session_state.role == "manager":
         st.sidebar.title("Manager Menu")
         if st.sidebar.button("Logout"):
@@ -74,25 +75,40 @@ else:
         st.header("Manager Control Panel")
         df = load_data(DATA_FILE)
         
-        # Download
+        # Download Excel
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=False)
         st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx")
 
-        # Reset Records
-        with st.expander("🗑️ Reset KM/Fuel Records"):
-            reset_plate = st.selectbox("Select Vehicle", ["None"] + df['plate'].tolist())
-            if reset_plate != "None":
-                if st.button("Confirm Reset KM Data"):
-                    v_idx = df[df['plate'] == reset_plate].index[0]
-                    df.at[v_idx, 'odo'] = 0
-                    df.at[v_idx, 'trip_km'] = 0
-                    df.at[v_idx, 'fuel_liters'] = 0
-                    df.at[v_idx, 'last_updated'] = "Reset by Manager"
-                    save_data(df, DATA_FILE)
-                    st.success(f"Records for {reset_plate} reset!")
-                    st.rerun()
+        # --- NEW: DELETE DRIVER OPTION ---
+        with st.expander("🗑️ Delete Driver or Reset Records"):
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.write("### Reset KM Data")
+                reset_plate = st.selectbox("Select Vehicle to Reset", ["None"] + df['plate'].tolist(), key="reset_box")
+                if reset_plate != "None":
+                    if st.button("Confirm KM Reset"):
+                        v_idx = df[df['plate'] == reset_plate].index[0]
+                        df.at[v_idx, 'odo'] = 0
+                        df.at[v_idx, 'trip_km'] = 0
+                        df.at[v_idx, 'fuel_liters'] = 0
+                        df.at[v_idx, 'last_updated'] = "Reset by Manager"
+                        save_data(df, DATA_FILE)
+                        st.success(f"Records for {reset_plate} reset!")
+                        st.rerun()
+            
+            with col_b:
+                st.write("### Delete Driver Account")
+                del_driver = st.selectbox("Select Driver to Remove", ["None"] + df['driver'].tolist(), key="del_box")
+                if del_driver != "None":
+                    st.warning(f"Permanently remove driver: {del_driver}?")
+                    if st.button("Confirm Delete Driver"):
+                        df = df[df['driver'] != del_driver]
+                        save_data(df, DATA_FILE)
+                        st.success(f"Driver {del_driver} has been deleted.")
+                        st.rerun()
 
         # Enroll Section
         with st.expander("➕ Enroll New Vehicle/Driver"):
@@ -114,56 +130,54 @@ else:
         hist_df = load_data(HISTORY_FILE)
         st.dataframe(hist_df.head(10), use_container_width=True)
 
+    # --- DRIVER VIEW ---
     else:
         st.header(f"Driver Portal: {st.session_state.user.upper()}")
         df = load_data(DATA_FILE)
-        v_idx = df[df['driver'].str.lower() == st.session_state.user].index[0]
-        v_data = df.iloc[v_idx]
-
-        # --- CALCULATIONS ---
-        try:
-            trip_km = float(v_data['trip_km'])
-            fuel = float(v_data['fuel_liters'])
-            current_avg = round(trip_km / fuel, 2) if fuel > 0 else 0.0
-        except: 
-            trip_km, current_avg = 0.0, 0.0
-
-        # --- METRICS DISPLAY ---
-        col1, col2 = st.columns(2)
-        col1.metric("Current Odometer", f"{v_data['odo']} km")
-        col2.metric("KM Run After Fueling", f"{trip_km} km") # Added this metric
+        v_idx_list = df[df['driver'].str.lower() == st.session_state.user].index
         
-        st.metric("Current Mileage Average", f"{current_avg} km/l")
+        if len(v_idx_list) == 0:
+            st.error("Account has been deleted or unassigned. Contact Manager.")
+            if st.button("Logout"):
+                st.session_state.logged_in = False
+                st.rerun()
+        else:
+            v_idx = v_idx_list[0]
+            v_data = df.iloc[v_idx]
 
-        if current_avg > 0:
-            if current_avg < 5:
-                st.warning(f"⚠️ Low Efficiency: {current_avg} km/l")
-            else:
-                st.success(f"✅ Good Efficiency: {current_avg} km/l")
+            try:
+                trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
+                avg = round(trip / fuel, 2) if fuel > 0 else 0.0
+            except: avg = 0.0
 
-        st.divider()
-        new_odo = st.number_input("Enter New Odometer Reading", min_value=float(v_data['odo']), step=1.0)
-        if st.button("Update Odometer"):
-            diff = new_odo - float(v_data['odo'])
-            df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
-            df.at[v_idx, 'odo'] = new_odo
-            df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            save_data(df, DATA_FILE)
-            add_history(v_data['plate'], st.session_state.user, new_odo, df.at[v_idx, 'trip_km'], v_data['fuel_liters'])
-            st.success("Odometer updated!")
-            st.rerun()
+            col1, col2 = st.columns(2)
+            col1.metric("Current Odometer", f"{v_data['odo']} km")
+            col2.metric("KM Since Last Fuel", f"{v_data['trip_km']} km")
+            st.metric("Mileage Average", f"{avg} km/l")
 
-        st.divider()
-        fuel_qty = st.number_input("Diesel Refilled (Liters)", min_value=0.0)
-        if st.button("Log Fuel & Reset Trip"):
-            df.at[v_idx, 'fuel_liters'] = fuel_qty
-            df.at[v_idx, 'trip_km'] = 0
-            df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            save_data(df, DATA_FILE)
-            add_history(v_data['plate'], st.session_state.user, v_data['odo'], 0, fuel_qty)
-            st.success("Fuel Logged! KM After Fueling reset to 0.")
-            st.rerun()
+            st.divider()
+            new_odo = st.number_input("Enter New Odometer Reading", min_value=float(v_data['odo']), step=1.0)
+            if st.button("Update Odometer"):
+                diff = new_odo - float(v_data['odo'])
+                df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
+                df.at[v_idx, 'odo'] = new_odo
+                df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                save_data(df, DATA_FILE)
+                add_history(v_data['plate'], st.session_state.user, new_odo, df.at[v_idx, 'trip_km'], v_data['fuel_liters'])
+                st.success("Odometer updated!")
+                st.rerun()
 
-        if st.button("Logout"):
-            st.session_state.logged_in = False
-            st.rerun()
+            st.divider()
+            fuel_qty = st.number_input("Diesel Refilled (Liters)", min_value=0.0)
+            if st.button("Log Fuel & Reset Trip"):
+                df.at[v_idx, 'fuel_liters'] = fuel_qty
+                df.at[v_idx, 'trip_km'] = 0
+                df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                save_data(df, DATA_FILE)
+                add_history(v_data['plate'], st.session_state.user, v_data['odo'], 0, fuel_qty)
+                st.success("Fuel Logged!")
+                st.rerun()
+
+            if st.button("Logout"):
+                st.session_state.logged_in = False
+                st.rerun()
