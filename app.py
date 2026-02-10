@@ -57,42 +57,35 @@ else:
 
         st.header("Manager Control Panel")
         df = load_data()
-        
-        # Download Excel
+
+        # Excel Download
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=False, sheet_name='Sheet1')
-        
         st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx", mime="application/vnd.ms-excel")
 
-        # Edit Section
-        with st.expander("📝 Edit Existing Driver/Vehicle"):
-            selected_plate = st.selectbox("Select Vehicle to Edit", df['plate'].tolist())
-            if selected_plate:
+        # Edit/Delete Section
+        with st.expander("📝 Edit/Delete Driver Records"):
+            selected_plate = st.selectbox("Select Vehicle", ["None"] + df['plate'].tolist())
+            if selected_plate != "None":
                 v_idx = df[df['plate'] == selected_plate].index[0]
-                new_driver = st.text_input("Update Driver", value=df.at[v_idx, 'driver'])
+                new_driver = st.text_input("Update Driver Name", value=df.at[v_idx, 'driver'])
                 if st.button("Save Changes"):
                     df.at[v_idx, 'driver'] = new_driver.lower()
                     save_data(df)
-                    st.success("Updated!")
+                    st.success("Details Updated!")
                     st.rerun()
-
-        # Delete Section
-        with st.expander("🗑️ Delete a Vehicle"):
-            delete_plate = st.selectbox("Select Vehicle to Remove", ["None"] + df['plate'].tolist())
-            if delete_plate != "None":
-                st.warning(f"Are you sure you want to permanently delete {delete_plate}?")
-                if st.button("Confirm Delete"):
-                    df = df[df['plate'] != delete_plate]
+                if st.button("🗑️ Delete Vehicle", type="secondary"):
+                    df = df[df['plate'] != selected_plate]
                     save_data(df)
-                    st.success(f"Vehicle {delete_plate} removed.")
+                    st.success("Vehicle Removed!")
                     st.rerun()
 
-        # Add Section
-        with st.expander("➕ Assign New Vehicle"):
+        # Add New Vehicle
+        with st.expander("➕ Enroll New Vehicle"):
             p = st.text_input("Plate No").upper()
             d = st.text_input("Driver Name").lower()
-            if st.button("Enroll Vehicle"):
+            if st.button("Enroll"):
                 if p and d:
                     new_row = {"plate": p, "driver": d, "odo": 0, "trip_km": 0, "fuel_liters": 0, "last_updated": "N/A"}
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
@@ -100,8 +93,17 @@ else:
                     st.success("Vehicle Enrolled!")
                     st.rerun()
 
-        st.subheader("Live Status Table")
-        st.dataframe(df, use_container_width=True)
+        st.subheader("Live Status & Mileage Alerts")
+        
+        # Mileage Calculation for Manager Table
+        df['AVG (km/l)'] = df.apply(lambda row: round(float(row['trip_km'])/float(row['fuel_liters']), 2) if float(row['fuel_liters']) > 0 else 0.0, axis=1)
+        
+        # Color Alert Styling
+        def color_avg(val):
+            color = 'red' if val < 5 and val > 0 else 'white'
+            return f'color: {color}'
+        
+        st.dataframe(df.style.applymap(color_avg, subset=['AVG (km/l)']), use_container_width=True)
 
     # --- DRIVER VIEW ---
     else:
@@ -112,28 +114,26 @@ else:
 
         st.info(f"**Vehicle:** {v_data['plate']} | **Current Odo:** {v_data['odo']} km")
         
-        # Update odometer
-        new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
+        # --- LIVE MILEAGE DISPLAY ---
+        try:
+            trip, fuel = float(v_data['trip_km']), float(v_data['fuel_liters'])
+            avg = round(trip / fuel, 2) if fuel > 0 else 0.0
+        except: avg = 0.0
+        
+        # Mileage Notification
+        if avg > 0:
+            if avg < 5:
+                st.warning(f"⚠️ Current Mileage: {avg} km/l (Efficiency is Low)")
+            else:
+                st.success(f"✅ Current Mileage: {avg} km/l (Good Efficiency)")
+        else:
+            st.write("--- Start Driving to Calculate Average ---")
 
+        # Update odometer
+        new_odo = st.number_input("Enter New Odometer Reading", min_value=float(v_data['odo']), step=1.0)
         if st.button("Update Odometer"):
             diff = new_odo - float(v_data['odo'])
             df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + diff
             df.at[v_idx, 'odo'] = new_odo
             df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            save_data(df)
-            st.success("Data Updated!")
-            st.rerun()
-
-        st.divider()
-        fuel_qty = st.number_input("Diesel Refilled (L)", min_value=0.0)
-        if st.button("Log Fuel & Reset Trip"):
-            df.at[v_idx, 'fuel_liters'] = fuel_qty
-            df.at[v_idx, 'trip_km'] = 0
-            df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            save_data(df)
-            st.success("Fuel Logged!")
-            st.rerun()
-
-        if st.sidebar.button("Logout"):
-            st.session_state.logged_in = False
-            st.rerun()
+            save_data(df
