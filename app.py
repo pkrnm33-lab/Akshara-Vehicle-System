@@ -53,5 +53,121 @@ if 'logged_in' not in st.session_state:
 
 if not st.session_state.logged_in:
     st.subheader("Login Portal")
+    # Added both input fields here
     user_input = st.text_input("Username").lower().strip()
-    pwd_input = st.text_input
+    pwd_input = st.text_input("Password", type="password") # RE-ADDED PASSWORD COLUMN
+    
+    if st.button("Login"):
+        if user_input == "manager" and pwd_input == "admin":
+            st.session_state.role = "manager"
+            st.session_state.logged_in = True
+            st.rerun()
+        elif user_input != "":
+            df = load_data()
+            if user_input in df['driver'].str.lower().values:
+                # For now, drivers only need their name, but we check if they filled something in the password box
+                if pwd_input:
+                    st.session_state.role = "driver"
+                    st.session_state.user = user_input
+                    st.session_state.logged_in = True
+                    st.rerun()
+                else:
+                    st.error("Please enter your password.")
+            else:
+                st.error("User not found.")
+else:
+    # --- MANAGER VIEW ---
+    if st.session_state.role == "manager":
+        st.sidebar.title("Manager Menu")
+        if st.sidebar.button("Logout"):
+            st.session_state.logged_in = False
+            st.rerun()
+
+        st.header("Manager Control Panel")
+        df = load_data()
+
+        with st.expander("📢 Edit or Delete Driver Message"):
+            current_raw_msg = get_manager_msg().split(" (Updated:")[0]
+            msg_to_edit = st.text_area("Update your message below:", value=current_raw_msg)
+            col1, col2 = st.columns(2)
+            if col1.button("✅ Update Message"):
+                set_manager_msg(msg_to_edit)
+                st.rerun()
+            if col2.button("🗑️ Delete Message"):
+                set_manager_msg("")
+                st.rerun()
+
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False)
+        st.download_button(label="📥 Download Excel Report", data=buffer, file_name="Akshara_Report.xlsx")
+
+        with st.expander("🗑️ Delete Driver or Reset Records"):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                reset_p = st.selectbox("Vehicle to Reset", ["None"] + df['plate'].tolist())
+                if reset_p != "None" and st.button("Confirm Reset"):
+                    v_idx = df[df['plate'] == reset_p].index[0]
+                    df.at[v_idx, 'odo'] = 0
+                    df.at[v_idx, 'trip_km'] = 0
+                    df.at[v_idx, 'fuel_liters'] = 0
+                    save_data(df)
+                    st.rerun()
+            with col_b:
+                del_d = st.selectbox("Driver to Remove", ["None"] + df['driver'].tolist())
+                if del_d != "None" and st.button("Confirm Delete"):
+                    df = df[df['driver'] != del_d]
+                    save_data(df)
+                    st.rerun()
+
+        with st.expander("➕ Enroll New Vehicle/Driver"):
+            p_new = st.text_input("Plate No").upper()
+            d_new = st.text_input("Driver Name").lower()
+            if st.button("Enroll Now"):
+                if p_new and d_new:
+                    new_row = {"plate": p_new, "driver": d_new, "odo": 0, "trip_km": 0, "fuel_liters": 0, "last_updated": "N/A"}
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                    save_data(df)
+                    st.rerun()
+
+        st.subheader("Live Vehicle Status Table")
+        df['AVG (km/l)'] = df.apply(lambda r: round(float(r['trip_km'])/float(r['fuel_liters']), 2) if float(r['fuel_liters']) > 0 else 0.0, axis=1)
+        st.dataframe(df, use_container_width=True)
+
+    # --- DRIVER VIEW ---
+    else:
+        st.header(f"Driver Portal: {st.session_state.user.upper()}")
+        df = load_data()
+        v_idx_list = df[df['driver'].str.lower() == st.session_state.user].index
+        if len(v_idx_list) == 0:
+            st.error("Account missing. Contact Manager.")
+        else:
+            v_idx = v_idx_list[0]
+            v_data = df.iloc[v_idx]
+            try:
+                avg = round(float(v_data['trip_km']) / float(v_data['fuel_liters']), 2) if float(v_data['fuel_liters']) > 0 else 0.0
+            except: avg = 0.0
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Odometer", f"{v_data['odo']} km")
+            col2.metric("Trip KM", f"{v_data['trip_km']} km")
+            col3.metric("Mileage", f"{avg} km/l")
+
+            new_odo = st.number_input("Enter New Odometer", min_value=float(v_data['odo']), step=1.0)
+            if st.button("Update Odometer"):
+                df.at[v_idx, 'trip_km'] = float(v_data['trip_km']) + (new_odo - float(v_data['odo']))
+                df.at[v_idx, 'odo'] = new_odo
+                df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                save_data(df)
+                st.rerun()
+            st.divider()
+            fuel_qty = st.number_input("Diesel Refilled (Liters)", min_value=0.0)
+            if st.button("Log Fuel & Reset Trip"):
+                df.at[v_idx, 'fuel_liters'] = fuel_qty
+                df.at[v_idx, 'trip_km'] = 0
+                df.at[v_idx, 'last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                save_data(df)
+                st.rerun()
+        if st.button("Logout"):
+            st.session_state.logged_in = False
+            st.rerun()
