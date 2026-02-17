@@ -1,71 +1,66 @@
 import streamlit as st
-import pandas as pd
-import requests
+from supabase import create_client, Client
 
-st.set_page_config(page_title="Akshara Vehicle System", layout="wide")
+# -------------------------
+# SUPABASE CONFIG
+# -------------------------
 
-URL = st.secrets["SUPABASE_URL"]
-KEY = st.secrets["SUPABASE_KEY"]
+SUPABASE_URL = "https://klvniiwgwiyqkvzfb tqa.supabase.co"
+SUPABASE_KEY = "PASTE_YOUR_ANON_PUBLIC_KEY_HERE"
 
-HEADERS = {
-    "apikey": KEY,
-    "Authorization": f"Bearer {KEY}",
-    "Content-Type": "application/json"
-}
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-BASE_URL = f"{URL}/rest/v1/vehicles"
+# -------------------------
+# PAGE SETTINGS
+# -------------------------
 
-st.markdown("<h1 style='text-align: center;'>AKSHARA PUBLIC SCHOOL</h1>", unsafe_allow_html=True)
-st.divider()
+st.set_page_config(page_title="Akshara Public School", layout="centered")
 
-# ---------------- LOAD DATA ----------------
-def load_data():
-    try:
-        response = requests.get(BASE_URL, headers=HEADERS)
-        if response.status_code == 200:
-            return pd.DataFrame(response.json())
-        else:
-            st.error(response.text)
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Data Load Error: {e}")
-        return pd.DataFrame()
+st.title("AKSHARA PUBLIC SCHOOL")
 
-df = load_data()
+# -------------------------
+# LOAD DATA
+# -------------------------
 
-# ---------------- ENROLL ----------------
+try:
+    response = supabase.table("vehicles").select("*").execute()
+    data = response.data
+except Exception as e:
+    st.error(f"Data Load Error: {e}")
+    data = []
+
+# -------------------------
+# ENROLL NEW DRIVER
+# -------------------------
+
 with st.expander("➕ Enroll New Driver"):
-    plate_no = st.text_input("Plate No").upper()
-    driver_name = st.text_input("Driver Name").upper()
+    plate = st.text_input("Vehicle Plate")
+    driver = st.text_input("Driver Name")
+    odo = st.number_input("Odometer Reading", min_value=0)
+    trip_km = st.number_input("Trip KM", min_value=0)
+    fuel_liters = st.number_input("Fuel Liters", min_value=0.0)
 
-    if st.button("Enroll Now"):
+    if st.button("Save"):
+        try:
+            supabase.table("vehicles").insert({
+                "plate": plate,
+                "driver": driver,
+                "odo": odo,
+                "trip_km": trip_km,
+                "fuel_liters": fuel_liters
+            }).execute()
 
-        if plate_no == "" or driver_name == "":
-            st.warning("Please fill all fields.")
-        else:
-            data = {
-                "plate": plate_no,
-                "driver": driver_name,
-                "odo": 0,
-                "trip_km": 0,
-                "fuel_liters": 1.0
-            }
+            st.success("Driver enrolled successfully!")
+            st.rerun()
 
-            try:
-                response = requests.post(BASE_URL, headers=HEADERS, json=data)
+        except Exception as e:
+            st.error(f"Insert Error: {e}")
 
-                if response.status_code in [200, 201]:
-                    st.success("Driver enrolled successfully!")
-                    st.rerun()
-                else:
-                    st.error(response.text)
+# -------------------------
+# SHOW DATA
+# -------------------------
 
-            except Exception as e:
-                st.error(f"Insertion Error: {e}")
-
-# ---------------- DISPLAY ----------------
-if not df.empty:
-    st.subheader("Current Fleet Status")
-    st.dataframe(df, use_container_width=True)
+if data:
+    st.dataframe(data)
 else:
     st.warning("Database is empty. Enroll your first driver above.")
