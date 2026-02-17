@@ -1,8 +1,7 @@
-st.write("Secrets loaded:", st.secrets)
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
-
+st.write("Secrets loaded:", st.secrets)
 # --- 1. SECURE DATABASE CONNECTION ---
 try:
     # Pulls the real keys you just saved in Secrets
