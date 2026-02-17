@@ -1,48 +1,78 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
-st.write("Secrets loaded:", st.secrets)
-# --- 1. SECURE DATABASE CONNECTION ---
+from supabase import create_client
+
+# -------------------------------
+# PAGE CONFIG
+# -------------------------------
+st.set_page_config(page_title="Akshara Vehicle System", layout="wide")
+
+# -------------------------------
+# CONNECT TO SUPABASE
+# -------------------------------
 try:
-    # Pulls the real keys you just saved in Secrets
     URL = st.secrets["SUPABASE_URL"]
     KEY = st.secrets["SUPABASE_KEY"]
-    supabase: Client = create_client(URL, KEY)
+
+    supabase = create_client(URL, KEY)
+
 except Exception as e:
-    st.error("⚠️ Database keys are not set correctly in Secrets.")
-    st.info("Ensure you replaced the placeholder text with your real project ID: klvniiwgwyqkvzfbtqa")
+    st.error("⚠️ Failed to connect to Supabase.")
+    st.error(str(e))
     st.stop()
 
-# --- 2. PAGE HEADER ---
-st.set_page_config(page_title="Akshara Vehicle System", layout="wide")
+# -------------------------------
+# HEADER
+# -------------------------------
 st.markdown("<h1 style='text-align: center;'>AKSHARA PUBLIC SCHOOL</h1>", unsafe_allow_html=True)
 st.divider()
 
-# Load fresh data from your cloud table
+# -------------------------------
+# LOAD DATA FUNCTION
+# -------------------------------
 def load_data():
     try:
-        res = supabase.table("vehicles").select("*").execute()
-        return pd.DataFrame(res.data)
+        response = supabase.table("vehicles").select("*").execute()
+        if response.data:
+            return pd.DataFrame(response.data)
+        else:
+            return pd.DataFrame()
     except Exception as e:
+        st.error(f"Data Load Error: {e}")
         return pd.DataFrame()
 
 df = load_data()
 
-# --- 3. ENROLLMENT SECTION ---
+# -------------------------------
+# ENROLL NEW DRIVER
+# -------------------------------
 with st.expander("➕ Enroll New Driver"):
-    p_n = st.text_input("Plate No").upper()
-    d_n = st.text_input("Driver Name").upper()
-    if st.button("Enroll Now"):
-        try:
-            # Saves data permanently to klvniiwgwyqkvzfbtqa.supabase.co
-            supabase.table("vehicles").insert({
-                "plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 1.0
-            }).execute()
-            st.success(f"Successfully enrolled {d_n}!"); st.rerun()
-        except Exception as e:
-            st.error(f"Error: {e}")
+    plate_no = st.text_input("Plate No").upper()
+    driver_name = st.text_input("Driver Name").upper()
 
-# --- 4. VIEW DATA ---
+    if st.button("Enroll Now"):
+
+        if plate_no == "" or driver_name == "":
+            st.warning("Please fill all fields.")
+        else:
+            try:
+                supabase.table("vehicles").insert({
+                    "plate": plate_no,
+                    "driver": driver_name,
+                    "odo": 0,
+                    "trip_km": 0,
+                    "fuel_liters": 1.0
+                }).execute()
+
+                st.success(f"Successfully enrolled {driver_name}!")
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Insertion Error: {e}")
+
+# -------------------------------
+# DISPLAY DATA
+# -------------------------------
 if not df.empty:
     st.subheader("Current Fleet Status")
     st.dataframe(df, use_container_width=True)
