@@ -9,17 +9,16 @@ supabase = create_client(url, key)
 
 st.set_page_config(page_title="Akshara Fleet Tracker", layout="wide")
 
-# --- CUSTOM CSS FOR LOGIN ---
+# --- CUSTOM CSS ---
 st.markdown("""
     <style>
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #1E3A8A; color: white; }
-    .main { background-color: #F8FAFC; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- SIDEBAR NAVIGATION ---
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Select Your Role", ["📝 Driver Log", "🔐 Manager Login"])
+page = st.sidebar.radio("Select Role", ["📝 Driver Log", "🔐 Manager Login"])
 
 # --- HEADER ---
 st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>AKSHARA PUBLIC SCHOOL</h1>", unsafe_allow_html=True)
@@ -35,7 +34,7 @@ except Exception as e:
     df = pd.DataFrame()
 
 # ==========================================================
-# PAGE 1: DRIVER LOG (Public Access)
+# PAGE 1: DRIVER LOG
 # ==========================================================
 if page == "📝 Driver Log":
     st.header("Daily Trip & Fuel Log")
@@ -52,4 +51,63 @@ if page == "📝 Driver Log":
                     supabase.table("vehicles").update({"odo": odo_reading, "fuel_liters": fuel_liters}).eq("id", row_id).execute()
                     st.success("✅ Log submitted successfully!")
                 except Exception as e:
-                    st.error(
+                    st.error(f"Error saving log: {e}")
+    else:
+        st.info("No drivers enrolled. Contact the Manager.")
+
+# ==========================================================
+# PAGE 2: MANAGER DASHBOARD (Password Protected)
+# ==========================================================
+elif page == "🔐 Manager Login":
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if not st.session_state["authenticated"]:
+        st.subheader("Administrative Access")
+        input_password = st.text_input("Enter Manager Password", type="password")
+        if st.button("Login"):
+            # The password you requested
+            if input_password == "Akshara@2026": 
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("❌ Incorrect Password")
+    
+    else:
+        st.sidebar.button("Logout", on_click=lambda: st.session_state.update({"authenticated": False}))
+        st.header("🛠️ Manager Dashboard")
+        
+        tab1, tab2 = st.tabs(["📊 Fleet History", "➕ Admin Controls"])
+        
+        with tab1:
+            if not df.empty:
+                st.dataframe(df[["id", "plate", "driver", "odo", "trip_km", "fuel_liters"]], use_container_width=True, hide_index=True)
+            else:
+                st.info("No records found.")
+
+        with tab2:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Enroll New Driver")
+                with st.form("enroll", clear_on_submit=True):
+                    p_no = st.text_input("Plate Number")
+                    d_name = st.text_input("Full Name")
+                    if st.form_submit_button("Enroll"):
+                        try:
+                            supabase.table("vehicles").insert({"plate": p_no, "driver": d_name, "odo": 0, "trip_km": 0, "fuel_liters": 0}).execute()
+                            st.success(f"Enrolled {d_name}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Enrollment Error: {e}")
+            
+            with col2:
+                st.subheader("Danger Zone")
+                if not df.empty:
+                    to_delete = st.selectbox("Select Driver to Delete", df['driver'].tolist())
+                    if st.button("🗑️ Delete Permanently"):
+                        try:
+                            supabase.table("vehicles").delete().eq("driver", to_delete).execute()
+                            st.success(f"Deleted {to_delete}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Delete failed: {e}")
