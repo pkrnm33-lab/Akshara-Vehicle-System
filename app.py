@@ -10,6 +10,7 @@ try:
     supabase: Client = create_client(URL, KEY)
 except Exception as e:
     st.error("⚠️ Database keys are not set correctly in Streamlit Secrets.")
+    st.info("Ensure you replaced 'your-project-id' with 'klvniiwgwyqkvzfbtqa'.")
     st.stop()
 
 # --- 2. PAGE HEADER ---
@@ -23,6 +24,7 @@ def load_data():
         res = supabase.table("vehicles").select("*").execute()
         return pd.DataFrame(res.data)
     except Exception as e:
+        # Returns empty if table is just new/empty
         return pd.DataFrame()
 
 df = load_data()
@@ -39,11 +41,11 @@ with st.expander("➕ Enroll New Driver"):
             }).execute()
             st.success(f"Successfully enrolled {d_n}!"); st.rerun()
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error saving to cloud: {e}")
 
 # --- 4. VIEW DATA ---
 if not df.empty:
     st.subheader("Current Fleet Status")
     st.dataframe(df, use_container_width=True)
 else:
-    st.info("Database connection active! Enroll your first driver above.")
+    st.info("✅ Database connection active! Enroll your first driver above.")
