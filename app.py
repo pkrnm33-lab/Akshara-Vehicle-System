@@ -21,29 +21,33 @@ st.markdown(f"""
     .stApp {{ background-color: #0E1117 !important; }}
     h1, h2, h3, p, span, label, .stMarkdown {{ color: #FFFFFF !important; }}
     .branded-header {{ border-bottom: 4px solid #4CAF50; padding: 10px 0 20px 0; margin-bottom: 30px; text-align: center; background-color: #1A1C24; }}
+    
+    /* Metrics for Drivers */
+    div[data-testid="stMetric"] {{
+        background: #1A1C24 !important;
+        border: 1px solid #4CAF50 !important;
+        border-radius: 12px;
+        padding: 15px;
+    }}
     div[data-testid="stMetricValue"] > div {{ color: #39FF14 !important; font-weight: 800 !important; }}
+    
     div.stButton > button {{ background-color: #2E7D32 !important; color: #FFFFFF !important; border-radius: 8px; font-weight: 700; padding: 12px 20px; width: 100%; }}
     .reset-btn button {{ background-color: #FFD700 !important; color: #000000 !important; }}
     .total-card {{ background: linear-gradient(135deg, #1e3c72, #2a5298); padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 25px; border: 2px solid #FFD700; }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. DATA LOADER (MERGING BOTH TABLES) ---
+# --- 4. DATA LOADER ---
 def load_data():
     try:
-        # Load core vehicle status (Odo, Driver, Plate)
         v_res = supabase.table("vehicles").select("*").execute()
         v_df = pd.DataFrame(v_res.data)
-        
-        # Load fuel history
         try:
             f_res = supabase.table("fuel_logs").select("*").execute()
             f_df = pd.DataFrame(f_res.data)
-        except:
-            f_df = pd.DataFrame()
+        except: f_df = pd.DataFrame()
         return v_df, f_df
-    except:
-        return pd.DataFrame(), pd.DataFrame()
+    except: return pd.DataFrame(), pd.DataFrame()
 
 df_v, df_f = load_data()
 
@@ -72,36 +76,24 @@ if 'logged_in' not in st.session_state:
             else: st.warning("Driver not found.")
     st.stop()
 
-# --- 7. MANAGER DASHBOARD (THE MASTER TABLE) ---
+# --- 7. MANAGER DASHBOARD ---
 if st.session_state.role == "manager":
     draw_header("🏆 MANAGER PORTAL")
     t1, t2, t3 = st.tabs(["📊 Performance", "➕ Add Vehicle", "📜 History"])
     
     with t1:
         if not df_v.empty:
-            # Prepare merged report
             report = df_v.copy()
             report['Trip KM'] = report['odo'] - report['trip_km']
-            
-            # Sum up historical diesel per plate
             if not df_f.empty:
                 df_f['Cost'] = df_f['liters'] * df_f['price']
                 total_spent = df_f['Cost'].sum()
-                
-                # Show Expenditure Card
                 st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL DIESEL EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {total_spent:,.2f}</h1></div>', unsafe_allow_html=True)
-                
-                # Merge totals into the main report
                 fuel_sums = df_f.groupby('plate').agg({'liters': 'sum', 'Cost': 'sum'}).reset_index()
                 report = report.merge(fuel_sums, on='plate', how='left').fillna(0)
-            
-            # Calculate Mileage based on total diesel
             report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['liters'], 2) if x['liters'] > 0 else 0, axis=1)
-            
-            # DISPLAY FULL TABLE WITH ALL COLUMNS
-            st.write("### 🚌 Fleet Status")
             st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'liters', 'Cost', 'Mileage']].rename(columns={
-                'plate': 'Bus', 'odo': 'Current Odo', 'liters': 'Total Ltrs', 'Cost': 'Total Cost (₹)'
+                'plate': 'Bus', 'odo': 'Current Odo', 'liters': 'Total L', 'Cost': 'Total ₹'
             }), use_container_width=True, hide_index=True)
 
     with t2:
@@ -113,28 +105,38 @@ if st.session_state.role == "manager":
     with t3:
         if not df_f.empty: st.dataframe(df_f.sort_values('created_at', ascending=False), use_container_width=True, hide_index=True)
 
-# --- 8. DRIVER INTERFACE ---
+# --- 8. DRIVER INTERFACE (FIXED: ADDED METRICS) ---
 else:
     draw_header(f"Welcome, {st.session_state.user}")
     v_data = df_v[df_v['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
+    
+    # Calculate Live Stats for Driver
+    trip_dist = v_data['odo'] - v_data['trip_km']
+    driver_fuel = df_f[df_f['plate'] == v_data['plate']]['liters'].sum() if not df_f.empty else 0
+    trip_mileage = round(trip_dist / driver_fuel, 2) if driver_fuel > 0 else 0
+    
+    # NEW: Performance Cards for Drivers
+    c1, c2 = st.columns(2)
+    c1.metric("Trip Distance", f"{trip_dist} km")
+    c2.metric("Efficiency", f"{trip_mileage} km/l")
+    
+    st.divider()
     st.subheader("1. Update Odometer")
     new_odo = st.number_input("Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
     if st.button("Save Reading"):
         supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
-        st.success("Reading Saved!"); st.rerun()
+        st.success("Odometer Saved!"); st.rerun()
 
     st.divider()
     st.subheader("2. Diesel Refilled")
-    c_a, c_b = st.columns(2)
-    with c_a: liters = st.number_input("Liters Added", min_value=0.0)
-    with c_b: price = st.number_input("Price/Liter (₹)", min_value=0.0, value=96.20)
+    ca, cb = st.columns(2)
+    with ca: liters = st.number_input("Liters Added", min_value=0.0)
+    with cb: price = st.number_input("Price/Liter (₹)", min_value=0.0, value=96.20)
     
     st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
     if st.button("Add to History"):
         if liters > 0:
-            # Permanent history log
             supabase.table("fuel_logs").insert({"plate": v_data['plate'], "driver": st.session_state.user, "liters": float(liters), "price": float(price)}).execute()
-            # DON'T reset trip_km here if you want cumulative mileage tracking
             st.success("Log Saved!"); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
