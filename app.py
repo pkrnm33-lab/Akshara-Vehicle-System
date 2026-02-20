@@ -21,7 +21,6 @@ st.markdown(f"""
     .stApp {{ background-color: #0E1117 !important; }}
     h1, h2, h3, p, span, label, .stMarkdown {{ color: #FFFFFF !important; }}
     .branded-header {{ border-bottom: 4px solid #4CAF50; padding: 10px 0 20px 0; margin-bottom: 30px; text-align: center; background-color: #1A1C24; }}
-    div[data-testid="stMetric"] {{ background: #1A1C24 !important; border: 1px solid #4CAF50 !important; border-radius: 12px; padding: 15px; }}
     div[data-testid="stMetricValue"] > div {{ color: #39FF14 !important; font-weight: 800 !important; }}
     div.stButton > button {{ background-color: #2E7D32 !important; color: #FFFFFF !important; border-radius: 8px; font-weight: 700; padding: 12px 20px; width: 100%; }}
     .reset-btn button {{ background-color: #FFD700 !important; color: #000000 !important; }}
@@ -37,6 +36,8 @@ def load_data():
         try:
             f_res = supabase.table("fuel_logs").select("*").execute()
             f_df = pd.DataFrame(f_res.data)
+            if not f_df.empty:
+                f_df['created_at'] = pd.to_datetime(f_df['created_at'])
         except: f_df = pd.DataFrame()
         return v_df, f_df
     except: return pd.DataFrame(), pd.DataFrame()
@@ -68,7 +69,7 @@ if 'logged_in' not in st.session_state:
             else: st.warning("Driver not found.")
     st.stop()
 
-# --- 7. MANAGER DASHBOARD (VEHICLE-WISE VIEW) ---
+# --- 7. MANAGER DASHBOARD ---
 if st.session_state.role == "manager":
     draw_header("🏆 MANAGER PORTAL")
     t1, t2, t3 = st.tabs(["📊 Performance", "➕ Add Vehicle", "⚙️ Admin Reset"])
@@ -79,24 +80,34 @@ if st.session_state.role == "manager":
             report['Trip KM'] = report['odo'] - report['trip_km']
             report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             
-            # --- CALCULATE VEHICLE-WISE TOTAL EXPENDITURE ---
             if not df_f.empty:
                 df_f['Cost'] = df_f['liters'] * df_f['price']
-                
-                # Show Grand Total
                 st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL FLEET EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {df_f["Cost"].sum():,.2f}</h1></div>', unsafe_allow_html=True)
                 
-                # Group by plate to get per-bus cost history
+                # --- MONTHLY BREAKDOWN ---
+                st.write("### 📅 Monthly Diesel Expenditure (By Bus)")
+                df_f['Month'] = df_f['created_at'].dt.strftime('%B %Y')
+                monthly_report = df_f.groupby(['plate', 'Month'])['Cost'].sum().reset_index()
+                st.dataframe(monthly_report.rename(columns={'plate': 'Bus', 'Cost': 'Spent (₹)'}), use_container_width=True, hide_index=True)
+                
+                # --- NEW: DOWNLOAD BUTTON ---
+                st.download_button(
+                    label="📥 Download Monthly Report (CSV)",
+                    data=monthly_report.to_csv(index=False),
+                    file_name="akshara_monthly_diesel.csv",
+                    mime="text/csv"
+                )
+                st.divider()
+
                 cost_history = df_f.groupby('plate')['Cost'].sum().reset_index()
                 report = report.merge(cost_history, on='plate', how='left').fillna(0)
             
-            # Display Full Table with "Total Cost (₹)" Column
+            st.write("### 🚌 Current Trip Performance")
             st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'fuel_liters', 'Cost', 'Mileage']].rename(columns={
-                'plate': 'Bus', 'odo': 'Current Odo', 'fuel_liters': 'Trip Liters', 'Cost': 'Total Cost (₹)'
+                'plate': 'Bus', 'odo': 'Current Odo', 'fuel_liters': 'Trip Liters', 'Cost': 'All-Time Cost (₹)'
             }), use_container_width=True, hide_index=True)
 
     with t2:
-        st.subheader("Enroll New Vehicle")
         p_n = st.text_input("Plate Number").upper().strip()
         d_n = st.text_input("Driver Name").upper().strip()
         if st.button("Save Vehicle"):
@@ -104,19 +115,17 @@ if st.session_state.role == "manager":
             st.rerun()
 
     with t3:
-        st.subheader("🔧 Odometer Override")
         if not df_v.empty:
             target = st.selectbox("Select Bus to Fix", df_v['plate'].unique())
             new_val = st.number_input("Enter Correct Odometer Value", min_value=0)
             if st.button("Overwrite Odometer Reading"):
                 supabase.table("vehicles").update({"odo": int(new_val)}).eq("plate", target).execute()
-                st.success(f"Bus {target} updated to {new_val} km"); st.rerun()
+                st.success(f"Bus {target} updated!"); st.rerun()
 
 # --- 8. DRIVER INTERFACE ---
 else:
     draw_header(f"Welcome, {st.session_state.user}")
     v_data = df_v[df_v['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
-    
     trip_dist = v_data['odo'] - v_data['trip_km']
     trip_mileage = round(trip_dist / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
     
@@ -126,7 +135,7 @@ else:
     
     st.divider()
     st.subheader("1. Update Odometer")
-    new_odo = st.number_input("Current Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
+    new_odo = st.number_input("Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
     if st.button("Save Reading"):
         supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
         st.success("Odometer Saved!"); st.rerun()
@@ -142,7 +151,7 @@ else:
         if liters > 0:
             supabase.table("fuel_logs").insert({"plate": v_data['plate'], "driver": st.session_state.user, "liters": float(liters), "price": float(price)}).execute()
             supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(liters)}).eq("plate", v_data['plate']).execute()
-            st.success("Trip Reset & New Fuel Logged!"); st.rerun()
+            st.success("New Trip Logged!"); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 if st.sidebar.button("Logout"): st.session_state.clear(); st.rerun()
