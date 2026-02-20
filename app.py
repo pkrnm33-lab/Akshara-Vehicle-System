@@ -15,7 +15,7 @@ except Exception as e:
     st.error("⚠️ Connection Error. Check Streamlit Secrets.")
     st.stop()
 
-# --- 3. HIGH-VISIBILITY DARK STYLING ---
+# --- 3. STYLING ---
 st.markdown(f"""
     <style>
     .stApp {{ background-color: #0E1117 !important; }}
@@ -29,19 +29,26 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. DATA LOADER ---
+# --- 4. DATA LOADER (FIXED FOR KEYERROR: 'PLATE') ---
 def load_data():
+    # Force empty dataframes to have correct columns to prevent KeyErrors
+    EMPTY_V = pd.DataFrame(columns=['plate', 'driver', 'odo', 'trip_km', 'fuel_liters'])
+    EMPTY_F = pd.DataFrame(columns=['id', 'created_at', 'plate', 'driver', 'liters', 'price'])
+    
     try:
         v_res = supabase.table("vehicles").select("*").execute()
-        v_df = pd.DataFrame(v_res.data)
+        v_df = pd.DataFrame(v_res.data) if v_res.data else EMPTY_V
+        
         try:
             f_res = supabase.table("fuel_logs").select("*").execute()
-            f_df = pd.DataFrame(f_res.data)
-            if not f_df.empty:
+            if f_res.data:
+                f_df = pd.DataFrame(f_res.data)
                 f_df['created_at'] = pd.to_datetime(f_df['created_at'])
-        except: f_df = pd.DataFrame()
+            else: f_df = EMPTY_F
+        except: f_df = EMPTY_F
+        
         return v_df, f_df
-    except: return pd.DataFrame(), pd.DataFrame()
+    except: return EMPTY_V, EMPTY_F
 
 df_v, df_f = load_data()
 
@@ -81,7 +88,7 @@ if st.session_state.role == "manager":
             report['Trip KM'] = report['odo'] - report['trip_km']
             report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             
-            if not df_f.empty:
+            if not df_f.empty and 'liters' in df_f.columns:
                 df_f['Cost'] = df_f['liters'] * df_f['price']
                 st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL DIESEL EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {df_f["Cost"].sum():,.2f}</h1></div>', unsafe_allow_html=True)
                 
@@ -114,54 +121,53 @@ if st.session_state.role == "manager":
             target = st.selectbox("Select Bus to Manage", df_v['plate'].unique())
             v_info = df_v[df_v['plate'] == target].iloc[0]
             
-            # --- FEATURE 1 & 2: ODO & TRIP RESET ---
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("#### 1. Quick Trip Reset")
+            # --- TRIP & ODO RESET ---
+            c_rst, c_odo = st.columns(2)
+            with c_rst:
+                st.markdown("#### 1. Trip Reset")
                 st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
                 if st.button(f"Reset Trip for {target}"):
                     supabase.table("vehicles").update({"trip_km": int(v_info['odo']), "fuel_liters": 0}).eq("plate", target).execute()
                     st.success("Trip reset!"); st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
-            with col2:
+            with c_odo:
                 st.markdown("#### 2. Odo Override")
-                new_odo_val = st.number_input("Set Odo", min_value=0, value=int(v_info['odo']))
+                new_v = st.number_input("Set Odo Value", min_value=0, value=int(v_info['odo']))
                 if st.button("Save Override"):
-                    supabase.table("vehicles").update({"odo": int(new_odo_val)}).eq("plate", target).execute()
+                    supabase.table("vehicles").update({"odo": int(new_v)}).eq("plate", target).execute()
                     st.success("Odo updated!"); st.rerun()
 
-            # --- FEATURE 3: EDIT/DELETE INDIVIDUAL LOGS ---
+            # --- EDIT/DELETE LOGS (PROTECTED AGAINST KEYERROR) ---
             st.markdown("---")
             st.write("#### 3. Edit or Delete Fuel Records")
-            bus_logs = df_f[df_f['plate'] == target].sort_values('created_at', ascending=False)
-            if not bus_logs.empty:
-                log_to_manage = st.selectbox("Select Log Entry", bus_logs['id'], format_func=lambda x: f"Log ID: {x} - {bus_logs[bus_logs['id']==x]['created_at'].iloc[0].strftime('%d %b %H:%M')}")
-                selected_log = bus_logs[bus_logs['id'] == log_to_manage].iloc[0]
+            if not df_f.empty and target in df_f['plate'].values:
+                bus_logs = df_f[df_f['plate'] == target].sort_values('created_at', ascending=False)
+                log_id = st.selectbox("Select Record", bus_logs['id'], format_func=lambda x: f"Log: {x} - {bus_logs[bus_logs['id']==x]['created_at'].iloc[0].strftime('%d %b')}")
+                sel_log = bus_logs[bus_logs['id'] == log_id].iloc[0]
                 
                 ea, eb = st.columns(2)
-                new_l = ea.number_input("Correct Liters", value=float(selected_log['liters']))
-                new_p = eb.number_input("Correct Price (₹)", value=float(selected_log['price']))
+                new_l = ea.number_input("Liters", value=float(sel_log['liters']))
+                new_p = eb.number_input("Price", value=float(sel_log['price']))
                 
-                c_edit, c_del = st.columns(2)
-                if c_edit.button("Update This Record"):
-                    supabase.table("fuel_logs").update({"liters": float(new_l), "price": float(new_p)}).eq("id", log_to_manage).execute()
+                cedit, cdel = st.columns(2)
+                if cedit.button("Update Log"):
+                    supabase.table("fuel_logs").update({"liters": float(new_l), "price": float(new_p)}).eq("id", log_id).execute()
                     st.success("Updated!"); st.rerun()
                 
                 st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
-                if c_del.button("Delete This Record"):
-                    supabase.table("fuel_logs").delete().eq("id", log_to_manage).execute()
+                if cdel.button("Delete Log"):
+                    supabase.table("fuel_logs").delete().eq("id", log_id).execute()
                     st.success("Deleted!"); st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
-            else: st.info("No logs found for this vehicle.")
+            else: st.info("No fuel records to edit for this bus.")
             
-            # --- FEATURE 4: MASTER PURGE ---
+            # --- MASTER PURGE ---
             st.markdown("---")
             st.write("#### 4. Master Financial Purge")
-            st.warning("Deletes ALL diesel history for ALL buses.")
-            confirm_purge = st.checkbox("Confirm Purge")
+            conf = st.checkbox("Confirm Total Purge")
             st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
             if st.button("PURGE ALL DATA"):
-                if confirm_purge:
+                if conf:
                     supabase.table("fuel_logs").delete().neq("id", 0).execute()
                     supabase.table("vehicles").update({"fuel_liters": 0, "trip_km": 0}).neq("plate", "X").execute()
                     st.success("System reset!"); st.rerun()
