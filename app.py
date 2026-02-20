@@ -78,9 +78,7 @@ if st.session_state.role == "manager":
     with t1:
         if not df_v.empty:
             report = df_v.copy()
-            # Calculate Trip KM: Current Odo - Trip Start point
             report['Trip KM'] = report['odo'] - report['trip_km']
-            # Mileage: Trip Distance / Liters from last fill
             report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             
             if not df_f.empty:
@@ -94,12 +92,9 @@ if st.session_state.role == "manager":
                 st.download_button("📥 Download Report", data=monthly_report.to_csv(index=False), file_name="akshara_monthly.csv")
                 st.divider()
 
-                # Merge history to show "All-Time Cost" column
                 cost_history = df_f.groupby('plate')['Cost'].sum().reset_index()
                 report = report.merge(cost_history, on='plate', how='left').fillna(0)
-            else:
-                # If history is empty, cost is 0
-                report['Cost'] = 0
+            else: report['Cost'] = 0
             
             st.write("### 🚌 Current Trip Performance")
             st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'fuel_liters', 'Cost', 'Mileage']].rename(columns={
@@ -119,34 +114,57 @@ if st.session_state.role == "manager":
             target = st.selectbox("Select Bus to Manage", df_v['plate'].unique())
             v_info = df_v[df_v['plate'] == target].iloc[0]
             
-            st.markdown("#### 1. Reset Trip (Fix Negative Values)")
-            st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
-            if st.button(f"Reset Trip for {target}"):
-                supabase.table("vehicles").update({"trip_km": int(v_info['odo']), "fuel_liters": 0}).eq("plate", target).execute()
-                st.success("Trip reset!"); st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-            
+            # --- FEATURE 1 & 2: ODO & TRIP RESET ---
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("#### 1. Quick Trip Reset")
+                st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
+                if st.button(f"Reset Trip for {target}"):
+                    supabase.table("vehicles").update({"trip_km": int(v_info['odo']), "fuel_liters": 0}).eq("plate", target).execute()
+                    st.success("Trip reset!"); st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+            with col2:
+                st.markdown("#### 2. Odo Override")
+                new_odo_val = st.number_input("Set Odo", min_value=0, value=int(v_info['odo']))
+                if st.button("Save Override"):
+                    supabase.table("vehicles").update({"odo": int(new_odo_val)}).eq("plate", target).execute()
+                    st.success("Odo updated!"); st.rerun()
+
+            # --- FEATURE 3: EDIT/DELETE INDIVIDUAL LOGS ---
             st.markdown("---")
-            st.write("#### 2. Correct Odometer")
-            new_val = st.number_input("Odometer Override", min_value=0, value=int(v_info['odo']))
-            if st.button("Save Manual Override"):
-                supabase.table("vehicles").update({"odo": int(new_val)}).eq("plate", target).execute()
-                st.success("Odometer updated!"); st.rerun()
+            st.write("#### 3. Edit or Delete Fuel Records")
+            bus_logs = df_f[df_f['plate'] == target].sort_values('created_at', ascending=False)
+            if not bus_logs.empty:
+                log_to_manage = st.selectbox("Select Log Entry", bus_logs['id'], format_func=lambda x: f"Log ID: {x} - {bus_logs[bus_logs['id']==x]['created_at'].iloc[0].strftime('%d %b %H:%M')}")
+                selected_log = bus_logs[bus_logs['id'] == log_to_manage].iloc[0]
+                
+                ea, eb = st.columns(2)
+                new_l = ea.number_input("Correct Liters", value=float(selected_log['liters']))
+                new_p = eb.number_input("Correct Price (₹)", value=float(selected_log['price']))
+                
+                c_edit, c_del = st.columns(2)
+                if c_edit.button("Update This Record"):
+                    supabase.table("fuel_logs").update({"liters": float(new_l), "price": float(new_p)}).eq("id", log_to_manage).execute()
+                    st.success("Updated!"); st.rerun()
+                
+                st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
+                if c_del.button("Delete This Record"):
+                    supabase.table("fuel_logs").delete().eq("id", log_to_manage).execute()
+                    st.success("Deleted!"); st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+            else: st.info("No logs found for this vehicle.")
             
-            # --- IMPROVED: COMPLETE FINANCIAL RESET ---
+            # --- FEATURE 4: MASTER PURGE ---
             st.markdown("---")
-            st.write("#### 3. Master Financial Reset")
-            st.warning("This clears ALL fuel history and resets the 'All-Time Cost' columns for everyone.")
-            confirm = st.checkbox("Confirm Complete Reset")
+            st.write("#### 4. Master Financial Purge")
+            st.warning("Deletes ALL diesel history for ALL buses.")
+            confirm_purge = st.checkbox("Confirm Purge")
             st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
-            if st.button("PURGE ALL DIESEL DATA"):
-                if confirm:
-                    # 1. Clear the fuel_logs table
+            if st.button("PURGE ALL DATA"):
+                if confirm_purge:
                     supabase.table("fuel_logs").delete().neq("id", 0).execute()
-                    # 2. Reset the trip meters to ensure clean math
                     supabase.table("vehicles").update({"fuel_liters": 0, "trip_km": 0}).neq("plate", "X").execute()
-                    st.success("System completely reset to zero!"); st.rerun()
-                else: st.error("Please check the box.")
+                    st.success("System reset!"); st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 8. DRIVER INTERFACE ---
