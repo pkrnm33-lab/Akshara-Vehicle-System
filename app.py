@@ -8,13 +8,12 @@ try:
     KEY = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(URL, KEY)
 except Exception as e:
-    st.error("⚠️ Database connection failed. Check Streamlit Secrets.")
+    st.error("⚠️ Connection failed. Check Streamlit Secrets.")
     st.stop()
 
 # --- 2. DATA LOADER ---
 def load_data():
     try:
-        # Pull fresh data from your project: klvniiwgwyqkvzfbtqa
         res = supabase.table("vehicles").select("*").execute()
         return pd.DataFrame(res.data)
     except:
@@ -22,89 +21,87 @@ def load_data():
 
 df = load_data()
 
-# --- 3. LOGIN GATE (FIXED) ---
+# --- 3. LOGIN GATE ---
 if 'logged_in' not in st.session_state:
     st.markdown("<h1 style='text-align: center;'>AKSHARA PUBLIC SCHOOL</h1>", unsafe_allow_html=True)
-    st.subheader("Login Portal")
-    user_input = st.text_input("Username (Enter Manager or your Driver Name)").upper().strip()
-    
+    user_input = st.text_input("Username").upper().strip()
     if st.button("Login"):
         if user_input == "MANAGER":
             st.session_state.role = "manager"; st.session_state.logged_in = True; st.rerun()
-        # Checks if the name exists in the database
         elif not df.empty and user_input in df['driver'].str.upper().str.strip().values:
             st.session_state.role = "driver"; st.session_state.user = user_input; st.session_state.logged_in = True; st.rerun()
         else:
-            st.error(f"User '{user_input}' not found. Manager must add you to the fleet first.")
+            st.error("User not found.")
     st.stop()
 
-# --- 4. MANAGER DASHBOARD (WITH EDIT/DELETE) ---
+# --- 4. MANAGER DASHBOARD ---
 if st.session_state.role == "manager":
     st.title("🏆 Manager Dashboard")
-    tab1, tab2, tab3 = st.tabs(["Fleet Performance", "Enroll Vehicle", "Manage & Delete"])
-
-    with tab1:
-        st.subheader("All Vehicle Status")
+    t1, t2, t3 = st.tabs(["Fleet Status", "Add Vehicle", "Manage & Delete"])
+    
+    with t1:
         if not df.empty:
             st.dataframe(df[['plate', 'driver', 'odo', 'trip_km', 'fuel_liters']], use_container_width=True, hide_index=True)
-
-    with tab2:
-        st.subheader("Add New Vehicle")
+    
+    with t2:
         p_n = st.text_input("Plate No").upper().strip()
         d_n = st.text_input("Driver Name").upper().strip()
-        if st.button("Save Vehicle"):
+        if st.button("Add to Fleet"):
             supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0.0}).execute()
-            st.success(f"Driver {d_n} can now log in!"); st.rerun()
-
-    with tab3:
-        st.subheader("⚙️ Edit/Delete Vehicles")
+            st.success("Vehicle Added!"); st.rerun()
+            
+    with t3:
         if not df.empty:
-            target = st.selectbox("Select Plate No", df['plate'].unique())
-            v_row = df[df['plate'] == target].iloc[0]
-            
-            with st.expander("📝 Edit Driver or Odometer"):
-                edit_name = st.text_input("New Driver Name", value=v_row['driver']).upper()
-                edit_odo = st.number_input("Odometer Correction", value=int(v_row['odo']))
-                if st.button("Update"):
-                    supabase.table("vehicles").update({"driver": edit_name, "odo": edit_odo}).eq("plate", target).execute()
-                    st.success("Record Updated!"); st.rerun()
-            
-            st.divider()
-            confirm = st.checkbox(f"Permanently Delete {target}?")
-            if st.button("🗑️ Delete Now", disabled=not confirm):
+            target = st.selectbox("Select Vehicle", df['plate'].unique())
+            confirm = st.checkbox(f"Confirm Delete {target}?")
+            if st.button("Delete Vehicle", disabled=not confirm):
                 supabase.table("vehicles").delete().eq("plate", target).execute()
-                st.warning("Vehicle Removed."); st.rerun()
+                st.rerun()
 
-# --- 5. DRIVER PORTAL (TRIP MILEAGE) ---
+# --- 5. DRIVER INTERFACE (MATCHING YOUR IMAGE) ---
 else:
-    st.title(f"👋 Driver: {st.session_state.user}")
     v_data = df[df['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
     
-    st.info(f"Bus: {v_data['plate']} | Current Odo: {v_data['odo']} KM")
+    # Dashboard Header
+    st.write("Trip KM")
+    st.title(f"{v_data['trip_km']} km")
+    
+    # Calculate Mileage
+    mileage = round(v_data['trip_km'] / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
+    st.write("Mileage")
+    st.title(f"{mileage} km/l")
+    
+    st.divider()
 
-    with st.form("driver_form"):
-        new_odo = st.number_input("New Odometer Reading", min_value=int(v_data['odo']))
-        diesel = st.number_input("Diesel Filled Now (Liters)", min_value=0.0)
-        
-        if st.form_submit_button("Submit & Calculate Mileage"):
-            km_run = new_odo - v_data['odo']
+    # Step 1: Update Odometer Only
+    st.write("Enter New Odometer")
+    new_odo = st.number_input("Odo Reading", min_value=float(v_data['odo']), value=float(v_data['odo']), label_visibility="collapsed")
+    if st.button("Update Odometer"):
+        km_run = new_odo - v_data['odo']
+        supabase.table("vehicles").update({
+            "odo": int(new_odo),
+            "trip_km": int(v_data['trip_km'] + km_run)
+        }).eq("plate", v_data['plate']).execute()
+        st.success("Odometer Updated!"); st.rerun()
+
+    st.divider()
+
+    # Step 2: Log Fuel & Finalize Trip
+    st.write("Diesel Refilled (Liters)")
+    diesel = st.number_input("Diesel Refilled", min_value=0.0, value=0.0, label_visibility="collapsed")
+    if st.button("Log Fuel & Reset Trip"):
+        if diesel > 0:
+            # We calculate mileage based on current trip before resetting
+            supabase.table("vehicles").update({
+                "fuel_liters": float(diesel)
+            }).eq("plate", v_data['plate']).execute()
+            st.success(f"Final Trip Mileage: {round(v_data['trip_km']/diesel, 2)} km/l")
             
-            if diesel > 0:
-                # Precise trip mileage calculation
-                trip_mileage = round(km_run / diesel, 2)
-                st.success(f"✅ TRIP MILEAGE: {trip_mileage} KM/L (Ran {km_run} KM on {diesel}L)")
-                
-                # Reset trip counters for fresh next-trip calculation
-                supabase.table("vehicles").update({
-                    "odo": int(new_odo), "trip_km": 0, "fuel_liters": 0.0 
-                }).eq("plate", v_data['plate']).execute()
-            else:
-                supabase.table("vehicles").update({
-                    "odo": int(new_odo), "trip_km": int(v_data['trip_km'] + km_run)
-                }).eq("plate", v_data['plate']).execute()
-                st.info(f"Odo updated. Total KM since last fuel: {v_data['trip_km'] + km_run}")
-            
+            # Resetting for next cycle
+            supabase.table("vehicles").update({"trip_km": 0, "fuel_liters": 0.0}).eq("plate", v_data['plate']).execute()
             st.rerun()
+        else:
+            st.warning("Please enter diesel amount to calculate mileage.")
 
 if st.sidebar.button("Logout"):
     st.session_state.clear(); st.rerun()
