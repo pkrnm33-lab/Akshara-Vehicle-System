@@ -29,13 +29,12 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. DATA LOADER ---
+# --- 4. DATA LOADER WITH SAFETY SHIELDS ---
 def load_data():
     try:
         v_res = supabase.table("vehicles").select("*").execute()
         v_df = pd.DataFrame(v_res.data)
         try:
-            # Fetching the cumulative history
             f_res = supabase.table("fuel_logs").select("*").execute()
             f_df = pd.DataFrame(f_res.data)
         except:
@@ -54,7 +53,7 @@ def draw_header(title=""):
     if title: st.markdown(f'<h2 style="color:#4CAF50; font-size:22px;">{title}</h2>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. LOGIN GATE ---
+# --- 6. LOGIN ---
 if 'logged_in' not in st.session_state:
     draw_header("FLEET LOGIN")
     user_input = st.text_input("Username").upper().strip()
@@ -74,11 +73,11 @@ if 'logged_in' not in st.session_state:
 # --- 7. MANAGER DASHBOARD ---
 if st.session_state.role == "manager":
     draw_header("🏆 MANAGER PORTAL")
-    t1, t2, t3 = st.tabs(["📊 Performance", "➕ Add Vehicle", "📜 Full History"])
+    t1, t2, t3 = st.tabs(["📊 Performance", "➕ Add Vehicle", "📜 History"])
     
     with t1:
-        if not df_f.empty and 'liters' in df_f.columns:
-            # Calculate Total Fleet Expenditure
+        # Check if history exists and contains columns before doing math
+        if not df_f.empty and 'liters' in df_f.columns and 'price' in df_f.columns:
             df_f['Cost'] = df_f['liters'] * df_f['price']
             total_spent = df_f['Cost'].sum()
             
@@ -89,12 +88,11 @@ if st.session_state.role == "manager":
                 </div>
             """, unsafe_allow_html=True)
             
-            # Cumulative Summary per bus
             summary = df_f.groupby('plate').agg({'liters': 'sum', 'Cost': 'sum'}).reset_index()
             st.dataframe(summary.rename(columns={'plate': 'Bus Number', 'liters': 'Total Diesel (L)', 'Cost': 'Total Cost (₹)'}), 
                          use_container_width=True, hide_index=True)
         else:
-            st.info("Expenditure data will appear here once the first diesel log is added.")
+            st.info("No diesel history found. Total expenditure will appear here once drivers start logging refills.")
 
     with t2:
         st.subheader("Enroll New Vehicle")
@@ -105,10 +103,7 @@ if st.session_state.role == "manager":
             st.success("Vehicle Added!"); st.rerun()
 
     with t3:
-        if not df_f.empty: 
-            st.write("### 📜 Every Refill Record")
-            st.dataframe(df_f.sort_values('created_at', ascending=False), use_container_width=True, hide_index=True)
-            st.download_button("📥 Download All History", data=df_f.to_csv(index=False), file_name="akshara_fuel_history.csv")
+        if not df_f.empty: st.dataframe(df_f.sort_values('created_at', ascending=False), use_container_width=True, hide_index=True)
 
 # --- 8. DRIVER INTERFACE ---
 else:
@@ -127,16 +122,15 @@ else:
     with c_b: price = st.number_input("Price/Liter (₹)", min_value=0.0, value=95.0)
     
     st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
-    if st.button("Add to Cumulative History"):
+    if st.button("Add to History"):
         if liters > 0:
-            # Permanent Insert: Data is never erased
+            # Permanent Insert
             supabase.table("fuel_logs").insert({
                 "plate": v_data['plate'], 
                 "driver": st.session_state.user, 
                 "liters": float(liters), 
                 "price": float(price)
             }).execute()
-            # Mark the vehicle's new trip start
             supabase.table("vehicles").update({"trip_km": int(v_data['odo'])}).eq("plate", v_data['plate']).execute()
             st.success("Refill Logged Permanently!"); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
