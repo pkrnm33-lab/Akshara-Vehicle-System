@@ -15,7 +15,7 @@ except Exception as e:
     st.error("⚠️ Connection Error. Check Streamlit Secrets.")
     st.stop()
 
-# --- 3. HIGH-VISIBILITY DARK STYLING ---
+# --- 3. STYLING (DARK MODE) ---
 st.markdown(f"""
     <style>
     .stApp {{ background-color: #0E1117 !important; }}
@@ -29,7 +29,7 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. DATA LOADER WITH SAFETY SHIELDS ---
+# --- 4. DATA LOADER ---
 def load_data():
     try:
         v_res = supabase.table("vehicles").select("*").execute()
@@ -62,7 +62,7 @@ if 'logged_in' not in st.session_state:
         if st.button("Login"):
             if pw == "Akshara@2026": 
                 st.session_state.role = "manager"; st.session_state.logged_in = True; st.rerun()
-            else: st.error("Invalid Password")
+            else: st.error("Wrong Password")
     else:
         if st.button("Login as Driver"):
             if not df_v.empty and user_input in df_v['driver'].str.upper().str.strip().values:
@@ -76,31 +76,24 @@ if st.session_state.role == "manager":
     t1, t2, t3 = st.tabs(["📊 Performance", "➕ Add Vehicle", "📜 History"])
     
     with t1:
-        # Check if history exists and contains columns before doing math
-        if not df_f.empty and 'liters' in df_f.columns and 'price' in df_f.columns:
+        if not df_f.empty and 'liters' in df_f.columns:
             df_f['Cost'] = df_f['liters'] * df_f['price']
             total_spent = df_f['Cost'].sum()
-            
-            st.markdown(f"""
-                <div class="total-card">
-                    <h3 style="margin:0; color:#FFD700;">💰 TOTAL DIESEL EXPENDITURE</h3>
-                    <h1 style="margin:0; color:#FFFFFF;">₹ {total_spent:,.2f}</h1>
-                </div>
-            """, unsafe_allow_html=True)
-            
+            st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL DIESEL EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {total_spent:,.2f}</h1></div>', unsafe_allow_html=True)
             summary = df_f.groupby('plate').agg({'liters': 'sum', 'Cost': 'sum'}).reset_index()
-            st.dataframe(summary.rename(columns={'plate': 'Bus Number', 'liters': 'Total Diesel (L)', 'Cost': 'Total Cost (₹)'}), 
-                         use_container_width=True, hide_index=True)
+            st.dataframe(summary.rename(columns={'plate': 'Bus', 'liters': 'Total L', 'Cost': 'Total ₹'}), use_container_width=True, hide_index=True)
         else:
-            st.info("No diesel history found. Total expenditure will appear here once drivers start logging refills.")
+            st.info("Log diesel to see expenditure here.")
 
     with t2:
-        st.subheader("Enroll New Vehicle")
+        st.subheader("Add Vehicle")
         p_n = st.text_input("Plate Number").upper().strip()
         d_n = st.text_input("Driver Name").upper().strip()
-        if st.button("Save Vehicle"):
-            supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0}).execute()
-            st.success("Vehicle Added!"); st.rerun()
+        if st.button("Save"):
+            try:
+                supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0}).execute()
+                st.success("Success!"); st.rerun()
+            except Exception as e: st.error(f"Save Failed: {e}")
 
     with t3:
         if not df_f.empty: st.dataframe(df_f.sort_values('created_at', ascending=False), use_container_width=True, hide_index=True)
@@ -109,30 +102,39 @@ if st.session_state.role == "manager":
 else:
     draw_header(f"Welcome, {st.session_state.user}")
     v_data = df_v[df_v['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
+    
     st.subheader("1. Update Odometer")
     new_odo = st.number_input("Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
     if st.button("Save Reading"):
-        supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
-        st.success("Reading Saved!"); st.rerun()
+        try:
+            supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
+            st.success("Odometer Updated!"); st.rerun()
+        except Exception as e: st.error(f"Update Failed: {e}")
 
     st.divider()
     st.subheader("2. Diesel Refilled")
     c_a, c_b = st.columns(2)
     with c_a: liters = st.number_input("Liters Added", min_value=0.0)
-    with c_b: price = st.number_input("Price/Liter (₹)", min_value=0.0, value=95.0)
+    with c_b: price = st.number_input("Price/Liter (₹)", min_value=0.0, value=96.20)
     
     st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
-    if st.button("Add to History"):
+    if st.button("Add to Cumulative History"):
         if liters > 0:
-            # Permanent Insert
-            supabase.table("fuel_logs").insert({
-                "plate": v_data['plate'], 
-                "driver": st.session_state.user, 
-                "liters": float(liters), 
-                "price": float(price)
-            }).execute()
-            supabase.table("vehicles").update({"trip_km": int(v_data['odo'])}).eq("plate", v_data['plate']).execute()
-            st.success("Refill Logged Permanently!"); st.rerun()
+            try:
+                # Permanent Insert into fuel history
+                supabase.table("fuel_logs").insert({
+                    "plate": v_data['plate'], 
+                    "driver": st.session_state.user, 
+                    "liters": float(liters), 
+                    "price": float(price)
+                }).execute()
+                # Update trip marker
+                supabase.table("vehicles").update({"trip_km": int(v_data['odo'])}).eq("plate", v_data['plate']).execute()
+                st.success("Diesel Logged Successfully!"); st.rerun()
+            except Exception as e:
+                # This will tell us exactly why it failed
+                st.error(f"❌ DATABASE ERROR: {e}")
+                st.info("Tip: Double check if 'fuel_logs' table in Supabase has columns named 'plate', 'driver', 'liters', and 'price'.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 if st.sidebar.button("Logout"): st.session_state.clear(); st.rerun()
