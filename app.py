@@ -68,34 +68,55 @@ if 'logged_in' not in st.session_state:
             else: st.warning("Driver not found.")
     st.stop()
 
-# --- 7. MANAGER DASHBOARD ---
+# --- 7. MANAGER DASHBOARD (VEHICLE-WISE VIEW) ---
 if st.session_state.role == "manager":
     draw_header("🏆 MANAGER PORTAL")
-    t1, t2 = st.tabs(["📊 Performance", "➕ Add Vehicle"])
+    t1, t2, t3 = st.tabs(["📊 Performance", "➕ Add Vehicle", "⚙️ Admin Reset"])
     
     with t1:
         if not df_v.empty:
             report = df_v.copy()
-            # CALCULATION: Current Odo - Starting Odo of THIS trip
             report['Trip KM'] = report['odo'] - report['trip_km']
-            # CALCULATION: Trip KM / Liters from LAST refill
             report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             
-            # Show Total Expenditure Card
+            # --- CALCULATE VEHICLE-WISE TOTAL EXPENDITURE ---
             if not df_f.empty:
                 df_f['Cost'] = df_f['liters'] * df_f['price']
-                st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL DIESEL EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {df_f["Cost"].sum():,.2f}</h1></div>', unsafe_allow_html=True)
+                
+                # Show Grand Total
+                st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL FLEET EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {df_f["Cost"].sum():,.2f}</h1></div>', unsafe_allow_html=True)
+                
+                # Group by plate to get per-bus cost history
+                cost_history = df_f.groupby('plate')['Cost'].sum().reset_index()
+                report = report.merge(cost_history, on='plate', how='left').fillna(0)
             
-            st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'fuel_liters', 'Mileage']].rename(columns={
-                'plate': 'Bus', 'odo': 'Current Odo', 'fuel_liters': 'Trip Liters'
+            # Display Full Table with "Total Cost (₹)" Column
+            st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'fuel_liters', 'Cost', 'Mileage']].rename(columns={
+                'plate': 'Bus', 'odo': 'Current Odo', 'fuel_liters': 'Trip Liters', 'Cost': 'Total Cost (₹)'
             }), use_container_width=True, hide_index=True)
+
+    with t2:
+        st.subheader("Enroll New Vehicle")
+        p_n = st.text_input("Plate Number").upper().strip()
+        d_n = st.text_input("Driver Name").upper().strip()
+        if st.button("Save Vehicle"):
+            supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0}).execute()
+            st.rerun()
+
+    with t3:
+        st.subheader("🔧 Odometer Override")
+        if not df_v.empty:
+            target = st.selectbox("Select Bus to Fix", df_v['plate'].unique())
+            new_val = st.number_input("Enter Correct Odometer Value", min_value=0)
+            if st.button("Overwrite Odometer Reading"):
+                supabase.table("vehicles").update({"odo": int(new_val)}).eq("plate", target).execute()
+                st.success(f"Bus {target} updated to {new_val} km"); st.rerun()
 
 # --- 8. DRIVER INTERFACE ---
 else:
     draw_header(f"Welcome, {st.session_state.user}")
     v_data = df_v[df_v['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
     
-    # Calculate Live Trip Stats for Driver
     trip_dist = v_data['odo'] - v_data['trip_km']
     trip_mileage = round(trip_dist / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
     
@@ -119,16 +140,9 @@ else:
     st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
     if st.button("Log Fuel & Start New Trip"):
         if liters > 0:
-            # 1. Save refill to permanent history log
             supabase.table("fuel_logs").insert({"plate": v_data['plate'], "driver": st.session_state.user, "liters": float(liters), "price": float(price)}).execute()
-            
-            # 2. Reset Trip: Set start Odo to NOW and save these Liters
-            supabase.table("vehicles").update({
-                "trip_km": int(v_data['odo']), 
-                "fuel_liters": float(liters)
-            }).eq("plate", v_data['plate']).execute()
-            
-            st.success("New Trip Started!"); st.rerun()
+            supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(liters)}).eq("plate", v_data['plate']).execute()
+            st.success("Trip Reset & New Fuel Logged!"); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 if st.sidebar.button("Logout"): st.session_state.clear(); st.rerun()
