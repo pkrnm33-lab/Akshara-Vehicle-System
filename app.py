@@ -14,6 +14,7 @@ except Exception as e:
 # --- 2. DATA LOADER ---
 def load_data():
     try:
+        # Pulls fresh data from project: klvniiwgwyqkvzfbtqa
         res = supabase.table("vehicles").select("*").execute()
         return pd.DataFrame(res.data)
     except:
@@ -58,22 +59,22 @@ if st.session_state.role == "manager":
                 supabase.table("vehicles").delete().eq("plate", target).execute()
                 st.rerun()
 
-# --- 5. DRIVER INTERFACE (MATCHING YOUR IMAGE) ---
+# --- 5. DRIVER INTERFACE (FIXED MILEAGE) ---
 else:
     v_data = df[df['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
     
-    # Dashboard Header
+    # Large Trip Dashboard
     st.write("Trip KM")
     st.title(f"{v_data['trip_km']} km")
     
-    # Calculate Mileage
-    mileage = round(v_data['trip_km'] / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
-    st.write("Mileage")
-    st.title(f"{mileage} km/l")
+    # This displays the mileage from the PREVIOUS tank
+    st.write("Last Recorded Mileage")
+    last_mileage = round(v_data['trip_km'] / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
+    st.title(f"{last_mileage} km/l")
     
     st.divider()
 
-    # Step 1: Update Odometer Only
+    # Step 1: Update Odometer Daily
     st.write("Enter New Odometer")
     new_odo = st.number_input("Odo Reading", min_value=float(v_data['odo']), value=float(v_data['odo']), label_visibility="collapsed")
     if st.button("Update Odometer"):
@@ -82,26 +83,37 @@ else:
             "odo": int(new_odo),
             "trip_km": int(v_data['trip_km'] + km_run)
         }).eq("plate", v_data['plate']).execute()
-        st.success("Odometer Updated!"); st.rerun()
+        st.success(f"Odometer Updated! You ran {km_run} KM today.")
+        st.rerun()
 
     st.divider()
 
-    # Step 2: Log Fuel & Finalize Trip
+    # Step 2: Calculate Particular Mileage
     st.write("Diesel Refilled (Liters)")
     diesel = st.number_input("Diesel Refilled", min_value=0.0, value=0.0, label_visibility="collapsed")
+    
     if st.button("Log Fuel & Reset Trip"):
-        if diesel > 0:
-            # We calculate mileage based on current trip before resetting
+        if diesel > 0 and v_data['trip_km'] > 0:
+            # FIX: Calculate mileage for the trip BEFORE resetting
+            trip_mileage = round(v_data['trip_km'] / diesel, 2)
+            
+            # Save the final fuel and trip to the cloud so the manager sees it
             supabase.table("vehicles").update({
                 "fuel_liters": float(diesel)
             }).eq("plate", v_data['plate']).execute()
-            st.success(f"Final Trip Mileage: {round(v_data['trip_km']/diesel, 2)} km/l")
             
-            # Resetting for next cycle
+            # Show the result to the driver
+            st.success(f"✅ TRIP COMPLETE! Mileage: {trip_mileage} km/l")
+            st.info(f"Summary: {v_data['trip_km']} KM run on {diesel}L of diesel.")
+            
+            # Reset the trip counters for the next fuel cycle
             supabase.table("vehicles").update({"trip_km": 0, "fuel_liters": 0.0}).eq("plate", v_data['plate']).execute()
-            st.rerun()
+            st.balloons()
+            # No immediate rerun so driver can see their mileage result
+        elif diesel <= 0:
+            st.error("Please enter the liters of diesel refilled.")
         else:
-            st.warning("Please enter diesel amount to calculate mileage.")
+            st.warning("Trip KM is 0. Drive the vehicle before calculating mileage.")
 
 if st.sidebar.button("Logout"):
     st.session_state.clear(); st.rerun()
