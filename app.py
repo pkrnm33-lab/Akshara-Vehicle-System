@@ -53,7 +53,7 @@ def draw_header(title=""):
     if title: st.markdown(f'<h2 style="color:#4CAF50; font-size:22px;">{title}</h2>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. LOGIN GATE ---
+# --- 6. LOGIN ---
 if 'logged_in' not in st.session_state:
     draw_header("FLEET LOGIN")
     user_input = st.text_input("Username").upper().strip()
@@ -78,7 +78,9 @@ if st.session_state.role == "manager":
     with t1:
         if not df_v.empty:
             report = df_v.copy()
+            # Calculate Trip KM: Current Odo - Trip Start point
             report['Trip KM'] = report['odo'] - report['trip_km']
+            # Mileage: Trip Distance / Liters from last fill
             report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             
             if not df_f.empty:
@@ -87,14 +89,17 @@ if st.session_state.role == "manager":
                 
                 df_f['Month'] = df_f['created_at'].dt.strftime('%B %Y')
                 monthly_report = df_f.groupby(['plate', 'Month'])['Cost'].sum().reset_index()
-                
                 st.write("### 📅 Monthly Diesel Expenditure")
                 st.dataframe(monthly_report.rename(columns={'plate': 'Bus', 'Cost': 'Spent (₹)'}), use_container_width=True, hide_index=True)
-                st.download_button("📥 Download Monthly Report", data=monthly_report.to_csv(index=False), file_name="akshara_monthly_report.csv")
+                st.download_button("📥 Download Report", data=monthly_report.to_csv(index=False), file_name="akshara_monthly.csv")
                 st.divider()
 
+                # Merge history to show "All-Time Cost" column
                 cost_history = df_f.groupby('plate')['Cost'].sum().reset_index()
                 report = report.merge(cost_history, on='plate', how='left').fillna(0)
+            else:
+                # If history is empty, cost is 0
+                report['Cost'] = 0
             
             st.write("### 🚌 Current Trip Performance")
             st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'fuel_liters', 'Cost', 'Mileage']].rename(columns={
@@ -102,7 +107,6 @@ if st.session_state.role == "manager":
             }), use_container_width=True, hide_index=True)
 
     with t2:
-        st.subheader("Enroll New Vehicle")
         p_n = st.text_input("Plate Number").upper().strip()
         d_n = st.text_input("Driver Name").upper().strip()
         if st.button("Save Vehicle"):
@@ -119,7 +123,7 @@ if st.session_state.role == "manager":
             st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
             if st.button(f"Reset Trip for {target}"):
                 supabase.table("vehicles").update({"trip_km": int(v_info['odo']), "fuel_liters": 0}).eq("plate", target).execute()
-                st.success(f"Trip reset to 0 km for {target}!"); st.rerun()
+                st.success("Trip reset!"); st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
             
             st.markdown("---")
@@ -129,17 +133,20 @@ if st.session_state.role == "manager":
                 supabase.table("vehicles").update({"odo": int(new_val)}).eq("plate", target).execute()
                 st.success("Odometer updated!"); st.rerun()
             
-            # --- NEW: MASTER FUEL RESET ---
+            # --- IMPROVED: COMPLETE FINANCIAL RESET ---
             st.markdown("---")
-            st.write("#### 3. Financial Reset (New Session)")
-            st.warning("This will permanently delete all fuel history logs for ALL buses. Use only for start of new year.")
-            confirm_reset = st.checkbox("I understand all expenditure data will be lost")
+            st.write("#### 3. Master Financial Reset")
+            st.warning("This clears ALL fuel history and resets the 'All-Time Cost' columns for everyone.")
+            confirm = st.checkbox("Confirm Complete Reset")
             st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
-            if st.button("DELETE ALL FUEL HISTORY"):
-                if confirm_reset:
+            if st.button("PURGE ALL DIESEL DATA"):
+                if confirm:
+                    # 1. Clear the fuel_logs table
                     supabase.table("fuel_logs").delete().neq("id", 0).execute()
-                    st.success("All fuel history cleared!"); st.rerun()
-                else: st.error("Please check the confirmation box first.")
+                    # 2. Reset the trip meters to ensure clean math
+                    supabase.table("vehicles").update({"fuel_liters": 0, "trip_km": 0}).neq("plate", "X").execute()
+                    st.success("System completely reset to zero!"); st.rerun()
+                else: st.error("Please check the box.")
             st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 8. DRIVER INTERFACE ---
