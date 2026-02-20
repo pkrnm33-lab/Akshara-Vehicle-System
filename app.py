@@ -24,6 +24,7 @@ st.markdown(f"""
     div[data-testid="stMetricValue"] > div {{ color: #39FF14 !important; font-weight: 800 !important; }}
     div.stButton > button {{ background-color: #2E7D32 !important; color: #FFFFFF !important; border-radius: 8px; font-weight: 700; padding: 12px 20px; width: 100%; }}
     .reset-btn button {{ background-color: #FFD700 !important; color: #000000 !important; }}
+    .delete-btn button {{ background-color: #FF4B4B !important; color: #FFFFFF !important; }}
     .total-card {{ background: linear-gradient(135deg, #1e3c72, #2a5298); padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 25px; border: 2px solid #FFD700; }}
     </style>
     """, unsafe_allow_html=True)
@@ -52,7 +53,7 @@ def draw_header(title=""):
     if title: st.markdown(f'<h2 style="color:#4CAF50; font-size:22px;">{title}</h2>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. LOGIN ---
+# --- 6. LOGIN GATE ---
 if 'logged_in' not in st.session_state:
     draw_header("FLEET LOGIN")
     user_input = st.text_input("Username").upper().strip()
@@ -82,21 +83,14 @@ if st.session_state.role == "manager":
             
             if not df_f.empty:
                 df_f['Cost'] = df_f['liters'] * df_f['price']
-                st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL FLEET EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {df_f["Cost"].sum():,.2f}</h1></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL DIESEL EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {df_f["Cost"].sum():,.2f}</h1></div>', unsafe_allow_html=True)
                 
-                # --- MONTHLY BREAKDOWN ---
-                st.write("### 📅 Monthly Diesel Expenditure (By Bus)")
                 df_f['Month'] = df_f['created_at'].dt.strftime('%B %Y')
                 monthly_report = df_f.groupby(['plate', 'Month'])['Cost'].sum().reset_index()
-                st.dataframe(monthly_report.rename(columns={'plate': 'Bus', 'Cost': 'Spent (₹)'}), use_container_width=True, hide_index=True)
                 
-                # --- NEW: DOWNLOAD BUTTON ---
-                st.download_button(
-                    label="📥 Download Monthly Report (CSV)",
-                    data=monthly_report.to_csv(index=False),
-                    file_name="akshara_monthly_diesel.csv",
-                    mime="text/csv"
-                )
+                st.write("### 📅 Monthly Diesel Expenditure")
+                st.dataframe(monthly_report.rename(columns={'plate': 'Bus', 'Cost': 'Spent (₹)'}), use_container_width=True, hide_index=True)
+                st.download_button("📥 Download Monthly Report", data=monthly_report.to_csv(index=False), file_name="akshara_monthly_report.csv")
                 st.divider()
 
                 cost_history = df_f.groupby('plate')['Cost'].sum().reset_index()
@@ -108,6 +102,7 @@ if st.session_state.role == "manager":
             }), use_container_width=True, hide_index=True)
 
     with t2:
+        st.subheader("Enroll New Vehicle")
         p_n = st.text_input("Plate Number").upper().strip()
         d_n = st.text_input("Driver Name").upper().strip()
         if st.button("Save Vehicle"):
@@ -115,12 +110,37 @@ if st.session_state.role == "manager":
             st.rerun()
 
     with t3:
+        st.subheader("🔧 Admin Control Panel")
         if not df_v.empty:
-            target = st.selectbox("Select Bus to Fix", df_v['plate'].unique())
-            new_val = st.number_input("Enter Correct Odometer Value", min_value=0)
-            if st.button("Overwrite Odometer Reading"):
+            target = st.selectbox("Select Bus to Manage", df_v['plate'].unique())
+            v_info = df_v[df_v['plate'] == target].iloc[0]
+            
+            st.markdown("#### 1. Reset Trip (Fix Negative Values)")
+            st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
+            if st.button(f"Reset Trip for {target}"):
+                supabase.table("vehicles").update({"trip_km": int(v_info['odo']), "fuel_liters": 0}).eq("plate", target).execute()
+                st.success(f"Trip reset to 0 km for {target}!"); st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            st.markdown("---")
+            st.write("#### 2. Correct Odometer")
+            new_val = st.number_input("Odometer Override", min_value=0, value=int(v_info['odo']))
+            if st.button("Save Manual Override"):
                 supabase.table("vehicles").update({"odo": int(new_val)}).eq("plate", target).execute()
-                st.success(f"Bus {target} updated!"); st.rerun()
+                st.success("Odometer updated!"); st.rerun()
+            
+            # --- NEW: MASTER FUEL RESET ---
+            st.markdown("---")
+            st.write("#### 3. Financial Reset (New Session)")
+            st.warning("This will permanently delete all fuel history logs for ALL buses. Use only for start of new year.")
+            confirm_reset = st.checkbox("I understand all expenditure data will be lost")
+            st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
+            if st.button("DELETE ALL FUEL HISTORY"):
+                if confirm_reset:
+                    supabase.table("fuel_logs").delete().neq("id", 0).execute()
+                    st.success("All fuel history cleared!"); st.rerun()
+                else: st.error("Please check the confirmation box first.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 8. DRIVER INTERFACE ---
 else:
@@ -133,15 +153,13 @@ else:
     c1.metric("Trip Distance", f"{trip_dist} km")
     c2.metric("Efficiency", f"{trip_mileage} km/l")
     
-    st.divider()
-    st.subheader("1. Update Odometer")
+    st.divider(); st.subheader("1. Update Odometer")
     new_odo = st.number_input("Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
     if st.button("Save Reading"):
         supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
-        st.success("Odometer Saved!"); st.rerun()
+        st.success("Saved!"); st.rerun()
 
-    st.divider()
-    st.subheader("2. Diesel Refilled")
+    st.divider(); st.subheader("2. Diesel Refilled")
     ca, cb = st.columns(2)
     with ca: liters = st.number_input("Liters Added", min_value=0.0)
     with cb: price = st.number_input("Price/Liter (₹)", min_value=0.0, value=96.20)
