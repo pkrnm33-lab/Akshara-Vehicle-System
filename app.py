@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 
-# --- 1. BRANDING & LOGO CONFIG ---
+# --- 1. BRANDING & CONFIG ---
 LOGO_IMAGE = "1000000180.jpg" 
 
 st.set_page_config(page_title="Akshara Fleet Portal", page_icon="🚌")
@@ -13,49 +13,48 @@ try:
     KEY = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(URL, KEY)
 except Exception as e:
-    st.error("⚠️ Connection Error.")
+    st.error("⚠️ Connection Error. Ensure Streamlit Secrets are set.")
     st.stop()
 
 # --- 3. HIGH-CONTRAST DARK STYLING ---
 st.markdown(f"""
     <style>
-    /* Deep charcoal background for the entire app */
+    /* Dark charcoal background */
     .stApp {{ background-color: #0E1117 !important; }}
     
-    /* Force all text to be bright white or neon for readability */
-    h1, h2, h3, p, span, label, .stMarkdown {{
+    /* White/Neon text for readability */
+    h1, h2, h3, p, span, label, .stMarkdown, .stTabs [data-baseweb="tab"] {{
         color: #FFFFFF !important; 
     }}
 
-    /* Branded Header with Logo */
+    /* Branded Header */
     .branded-header {{
-        border-bottom: 4px solid #4CAF50; /* Logo Green Accent */
+        border-bottom: 4px solid #4CAF50;
         padding: 10px 0 20px 0;
         margin-bottom: 30px;
         text-align: center;
         background-color: #1A1C24;
     }}
+    .logo-img {{ width: 220px; height: auto; }}
 
-    /* DARK METRIC CARDS: Neon text on dark background */
+    /* Neon Metric Cards */
     div[data-testid="stMetric"] {{
         background: #1A1C24 !important;
         border: 1px solid #4CAF50 !important;
         border-radius: 12px;
         padding: 15px;
-        box-shadow: 0 4px 10px rgba(0,255,0,0.1);
     }}
-    /* Force neon colors for values */
     div[data-testid="stMetricLabel"] > div {{ color: #BBBBBB !important; }}
     div[data-testid="stMetricValue"] > div {{ color: #39FF14 !important; font-weight: 800 !important; }}
 
-    /* Inputs: Light text on dark boxes */
+    /* Input Boxes */
     input {{
         color: #FFFFFF !important;
         background-color: #262730 !important;
         border: 1px solid #4CAF50 !important;
     }}
 
-    /* School Green Primary Buttons */
+    /* Buttons */
     div.stButton > button {{
         background-color: #2E7D32 !important;
         color: #FFFFFF !important;
@@ -64,11 +63,10 @@ st.markdown(f"""
         border: none;
         padding: 12px 20px;
         width: 100%;
-        box-shadow: 0 4px 15px rgba(46,125,50,0.3);
     }}
     
-    /* Logo Yellow for Reset Button */
-    .reset-btn button {{ 
+    /* Yellow Reset/Warning Buttons */
+    .reset-btn button, .delete-btn button {{ 
         background-color: #FFD700 !important; 
         color: #000000 !important; 
     }}
@@ -86,7 +84,7 @@ def draw_header(title=""):
         st.markdown(f'<h2 style="color:#4CAF50; font-size:24px;">{title}</h2>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 5. DATA ---
+# --- 5. DATA LOADER ---
 def load_data():
     try:
         res = supabase.table("vehicles").select("*").execute()
@@ -96,7 +94,7 @@ def load_data():
 
 df = load_data()
 
-# --- 6. LOGIN ---
+# --- 6. LOGIN GATE ---
 if 'logged_in' not in st.session_state:
     draw_header("FLEET LOGIN")
     user_input = st.text_input("Username").upper().strip()
@@ -113,18 +111,39 @@ if 'logged_in' not in st.session_state:
             else: st.warning("Driver not found.")
     st.stop()
 
-# --- 7. MANAGER ---
+# --- 7. MANAGER DASHBOARD (WITH MISSING TABS) ---
 if st.session_state.role == "manager":
     draw_header("🏆 MANAGER PORTAL")
     t1, t2, t3 = st.tabs(["📊 Performance", "➕ Add Vehicle", "⚙️ Admin"])
+    
     with t1:
         if not df.empty:
             m_df = df.copy()
             m_df['Trip KM'] = m_df['odo'] - m_df['trip_km']
             m_df['Mileage'] = m_df.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             st.dataframe(m_df[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']], use_container_width=True, hide_index=True)
+            st.download_button("📥 Export CSV", data=m_df.to_csv(index=False), file_name="akshara_fleet.csv")
 
-# --- 8. DRIVER ---
+    with t2:
+        st.subheader("Enroll New Bus")
+        p_n = st.text_input("Plate Number").upper().strip()
+        d_n = st.text_input("Driver Name").upper().strip()
+        if st.button("Save Vehicle"):
+            supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0.0}).execute()
+            st.success("Vehicle Enrolled!")
+            st.rerun()
+
+    with t3:
+        st.subheader("Manage Fleet (Remove)")
+        if not df.empty:
+            target = st.selectbox("Select Vehicle to Delete", df['plate'].unique())
+            st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
+            if st.button(f"Permanently Delete {target}"):
+                supabase.table("vehicles").delete().eq("plate", target).execute()
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+# --- 8. DRIVER INTERFACE ---
 else:
     draw_header(f"Welcome, {st.session_state.user}")
     v_data = df[df['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
@@ -138,7 +157,7 @@ else:
     st.divider()
     st.subheader("1. Update Daily Reading")
     new_odo = st.number_input("Current Odometer", min_value=float(v_data['odo']), value=float(v_data['odo']))
-    if st.button("Save Log"):
+    if st.button("Save Daily Log"):
         supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
         st.success("Reading Saved!"); st.rerun()
 
