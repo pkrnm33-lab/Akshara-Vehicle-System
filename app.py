@@ -3,20 +3,20 @@ import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime
 
-# --- 1. BRANDING & LOGO ---
+# --- 1. BRANDING & CONFIGURATION ---
 LOGO_IMAGE = "1000000180.jpg" 
-st.set_page_config(page_title="Akshara Fleet Portal", page_icon="🚌")
+st.set_page_config(page_title="Akshara Fleet Portal", page_icon="🚌", layout="wide")
 
-# --- 2. SECURE CONNECTION ---
+# --- 2. DATABASE CONNECTION ---
 try:
     URL = st.secrets["SUPABASE_URL"]
     KEY = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(URL, KEY)
 except Exception as e:
-    st.error("⚠️ Connection Error. Check Streamlit Secrets.")
+    st.error("⚠️ Connection Error. Please check your Streamlit Secrets.")
     st.stop()
 
-# --- 3. STYLING (DARK THEME) ---
+# --- 3. CUSTOM STYLING ---
 st.markdown(f"""
     <style>
     .stApp {{ background-color: #0E1117 !important; }}
@@ -24,30 +24,38 @@ st.markdown(f"""
     .branded-header {{ border-bottom: 4px solid #4CAF50; padding: 10px 0 20px 0; margin-bottom: 30px; text-align: center; background-color: #1A1C24; }}
     div[data-testid="stMetricValue"] > div {{ color: #39FF14 !important; font-weight: 800 !important; }}
     div.stButton > button {{ background-color: #2E7D32 !important; color: #FFFFFF !important; border-radius: 8px; font-weight: 700; padding: 12px 20px; width: 100%; }}
+    .reset-btn button {{ background-color: #FFD700 !important; color: #000000 !important; }}
+    .delete-btn button {{ background-color: #FF4B4B !important; color: #FFFFFF !important; }}
     .total-card {{ background: linear-gradient(135deg, #1e3c72, #2a5298); padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 25px; border: 2px solid #FFD700; }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. DATA LOADER (PROTECTED AGAINST KEYERRORS) ---
+# --- 4. ROBUST DATA LOADER (FIXES ALL CRASHES) ---
 def load_data():
-    # Forced structures to prevent crashes after reset
-    EMPTY_V = pd.DataFrame(columns=['plate', 'driver', 'odo', 'trip_km', 'fuel_liters'])
-    EMPTY_F = pd.DataFrame(columns=['id', 'created_at', 'plate', 'driver', 'liters', 'price'])
-    EMPTY_M = pd.DataFrame(columns=['id', 'created_at', 'plate', 'service_type', 'cost', 'service_date'])
+    # Force empty dataframes to have correct columns to prevent KeyErrors
+    df_v = pd.DataFrame(columns=['plate', 'driver', 'odo', 'trip_km', 'fuel_liters'])
+    df_f = pd.DataFrame(columns=['id', 'created_at', 'plate', 'driver', 'liters', 'price'])
+    df_m = pd.DataFrame(columns=['id', 'created_at', 'plate', 'service_type', 'cost', 'service_date'])
+    
     try:
         v_res = supabase.table("vehicles").select("*").execute()
-        v_df = pd.DataFrame(v_res.data) if v_res.data else EMPTY_V
+        if v_res.data: df_v = pd.DataFrame(v_res.data)
+        
         f_res = supabase.table("fuel_logs").select("*").execute()
-        f_df = pd.DataFrame(f_res.data) if f_res.data else EMPTY_F
-        if not f_df.empty: f_df['created_at'] = pd.to_datetime(f_df['created_at'])
+        if f_res.data: 
+            df_f = pd.DataFrame(f_res.data)
+            df_f['created_at'] = pd.to_datetime(df_f['created_at'])
+            
         m_res = supabase.table("maintenance_logs").select("*").execute()
-        m_df = pd.DataFrame(m_res.data) if m_res.data else EMPTY_M
-        return v_df, f_df, m_df
-    except: return EMPTY_V, EMPTY_F, EMPTY_M
+        if m_res.data:
+            df_m = pd.DataFrame(m_res.data)
+            df_m['service_date'] = pd.to_datetime(df_m.get('service_date', df_m['created_at'])).dt.date
+    except: pass
+    return df_v, df_f, df_m
 
 df_v, df_f, df_m = load_data()
 
-# --- 5. SHARED HEADER ---
+# --- 5. HEADER COMPONENT ---
 def draw_header(title=""):
     st.markdown('<div class="branded-header">', unsafe_allow_html=True)
     try: st.image(LOGO_IMAGE, width=250)
@@ -55,7 +63,7 @@ def draw_header(title=""):
     if title: st.markdown(f'<h2 style="color:#4CAF50; font-size:22px;">{title}</h2>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. LOGIN ---
+# --- 6. LOGIN LOGIC ---
 if 'logged_in' not in st.session_state:
     draw_header("FLEET LOGIN")
     user_input = st.text_input("Username").upper().strip()
@@ -72,55 +80,66 @@ if 'logged_in' not in st.session_state:
             else: st.warning("Driver not found.")
     st.stop()
 
-# --- 7. MANAGER DASHBOARD ---
+# --- 7. MANAGER PORTAL ---
 if st.session_state.role == "manager":
     draw_header("🏆 MANAGER PORTAL")
-    t1, t2, t3 = st.tabs(["📊 Performance", "🛠️ Maintenance", "⚙️ Admin Reset"])
-    with t1:
+    tabs = st.tabs(["📊 Performance", "🛠️ Maintenance", "➕ Add Vehicle", "⚙️ Admin Reset"])
+    
+    with tabs[0]: # Performance & Monthly Report
         if not df_v.empty:
             report = df_v.copy()
             report['Trip KM'] = report['odo'] - report['trip_km']
             report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
-            st.write("### 🚌 Current Trip Performance")
-            st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']], use_container_width=True, hide_index=True)
+            
+            # Combine Fuel and Maint Costs
+            f_total, m_total = 0, 0
+            if not df_f.empty:
+                df_f['Cost'] = df_f['liters'] * df_f['price']
+                f_total = df_f['Cost'].sum()
+                f_sums = df_f.groupby('plate')['Cost'].sum().reset_index().rename(columns={'Cost': 'Fuel ₹'})
+                report = report.merge(f_sums, on='plate', how='left').fillna(0)
+            else: report['Fuel ₹'] = 0
 
-# --- 8. DRIVER INTERFACE (FIXED: ADDED MILEAGE HISTORY) ---
-else:
-    draw_header(f"Welcome, {st.session_state.user}")
-    v_data = df_v[df_v['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
-    
-    # 1. LIVE PERFORMANCE METRICS
-    trip_d = v_data['odo'] - v_data['trip_km']
-    trip_m = round(trip_d / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
-    c1, c2 = st.columns(2)
-    c1.metric("Trip Distance", f"{trip_d} km")
-    c2.metric("Current Efficiency", f"{trip_m} km/l")
-    
-    # 2. NEW: PERFORMANCE HISTORY TABLE
-    st.divider()
-    st.write("### 📜 Your Performance History")
-    if not df_f.empty and v_data['plate'] in df_f['plate'].values:
-        driver_logs = df_f[df_f['plate'] == v_data['plate']].sort_values('created_at', ascending=False)
-        st.dataframe(driver_logs[['created_at', 'liters', 'price']].rename(columns={
-            'created_at': 'Date', 'liters': 'Liters Added', 'price': 'Price (₹)'
-        }), use_container_width=True, hide_index=True)
-    else: st.info("No logs found for your vehicle yet.")
+            if not df_m.empty:
+                m_total = df_m['cost'].sum()
+                m_sums = df_m.groupby('plate')['cost'].sum().reset_index().rename(columns={'cost': 'Maint ₹'})
+                report = report.merge(m_sums, on='plate', how='left').fillna(0)
+            else: report['Maint ₹'] = 0
 
-    # 3. INPUT FIELDS
-    st.divider(); st.subheader("1. Update Odometer")
-    no = st.number_input("Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
-    if st.button("Save Reading"):
-        supabase.table("vehicles").update({"odo": int(no)}).eq("plate", v_data['plate']).execute()
-        st.success("Odometer Saved!"); st.rerun()
+            st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL FLEET EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {f_total + m_total:,.2f}</h1><p style="margin:0; font-size:14px;">Diesel: ₹{f_total:,.0f} | Maint: ₹{m_total:,.0f}</p></div>', unsafe_allow_html=True)
+            
+            st.write("### 🚌 Fleet Status")
+            st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'Mileage', 'Fuel ₹', 'Maint ₹']].rename(columns={'plate': 'Bus', 'odo': 'Current Odo'}), use_container_width=True, hide_index=True)
 
-    st.divider(); st.subheader("2. Diesel Refilled")
-    ca, cb = st.columns(2)
-    with ca: li = st.number_input("Liters Added", min_value=0.0)
-    with cb: pr = st.number_input("Price/Liter (₹)", value=96.20)
-    if st.button("Log Fuel & Start New Trip"):
-        if li > 0:
-            supabase.table("fuel_logs").insert({"plate": v_data['plate'], "driver": st.session_state.user, "liters": float(li), "price": float(pr)}).execute()
-            supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(li)}).eq("plate", v_data['plate']).execute()
-            st.success("Trip Reset & Logged!"); st.rerun()
+    with tabs[1]: # Maintenance Tracking
+        st.subheader("🛠️ Log New Service")
+        m_bus = st.selectbox("Select Vehicle", df_v['plate'].unique(), key="m_bus_mgr")
+        m_date = st.date_input("Service Date", value=datetime.today())
+        m_type = st.text_input("Work Done (e.g. Oil Change)")
+        m_cost = st.number_input("Cost (₹)", min_value=0.0)
+        if st.button("Save Record"):
+            if m_type and m_cost > 0:
+                supabase.table("maintenance_logs").insert({"plate": m_bus, "service_type": m_type, "cost": m_cost, "service_date": str(m_date)}).execute()
+                st.success("Maintenance logged!"); st.rerun()
+        
+        st.divider()
+        st.write(f"### 📜 History for {m_bus}")
+        if not df_m.empty:
+            bus_m = df_m[df_m['plate'] == m_bus].sort_values('service_date', ascending=False)
+            st.dataframe(bus_m[['service_date', 'service_type', 'cost']].rename(columns={'service_date': 'Date', 'service_type': 'Work', 'cost': 'Amount'}), use_container_width=True, hide_index=True)
 
-if st.sidebar.button("Logout"): st.session_state.clear(); st.rerun()
+    with tabs[3]: # Admin Tools (ODO, Diesel, Maint Editors)
+        st.subheader("⚙️ Admin Control Panel")
+        target = st.selectbox("Select Bus to Edit", df_v['plate'].unique())
+        v_info = df_v[df_v['plate'] == target].iloc[0]
+        
+        st.write("#### 1. Fix Odometer & Reset Trip")
+        ca, cb = st.columns(2)
+        with ca:
+            new_odo = st.number_input("Correct Odo", value=int(v_info['odo']))
+            if st.button("Update Odometer"):
+                supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", target).execute(); st.rerun()
+        with cb:
+            st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
+            if st.button(f"Reset {target} Trip"):
+                supabase.table("vehicles").update({"trip_km": int(v_info['odo']), "fuel_liters": 0}).eq("plate", target).
