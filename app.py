@@ -78,7 +78,6 @@ if st.session_state.role == "manager":
             m_df['Trip KM'] = m_df['odo'] - m_df['trip_km']
             m_df['Mileage'] = m_df.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             
-            # Clean formatting for Live Table
             m_df['Mileage'] = m_df['Mileage'].astype(float).round(2)
             def style_mileage(v): return 'color: green; font-weight: bold' if v > 12 else 'color: red'
             
@@ -130,7 +129,7 @@ if st.session_state.role == "manager":
         else:
             st.info("No fuel logs recorded yet.")
 
-    # 3. MAINTENANCE
+    # 3. MAINTENANCE (UPGRADED DASHBOARD)
     with t3:
         st.subheader("🔧 Maintenance & Repairs Log")
         with st.expander("➕ Log New Repair or Service"):
@@ -158,10 +157,39 @@ if st.session_state.role == "manager":
                 st.info("No vehicles in the fleet to log maintenance for.")
         
         st.divider()
-        st.write("### 📜 Fleet Maintenance History")
+        st.write("### 📜 Fleet Maintenance Dashboard")
         maint_df = load_data("maintenance")
-        if not maint_df.empty:
+        
+        if not maint_df.empty and 'cost' in maint_df.columns:
+            # A. Grand Total Maintenance Metric
+            grand_total_maint = maint_df['cost'].sum()
+            st.metric("🛠️ Total Fleet Maintenance Cost", f"₹ {grand_total_maint:,.2f}")
+            
+            # B. Vehicle-Wise Maintenance Sheet
+            st.write("#### 🚌 Vehicle-Wise Maintenance Sheet")
+            maint_summary = maint_df.groupby('plate').agg(
+                Total_Repairs=('work_type', 'count'),
+                Total_Cost=('cost', 'sum')
+            ).reset_index()
+            
+            maint_summary.rename(columns={'plate': 'Plate No', 'Total_Repairs': 'Number of Services', 'Total_Cost': 'Total Cost (₹)'}, inplace=True)
+            maint_summary = maint_summary.sort_values(by="Total Cost (₹)", ascending=False)
+            
+            st.dataframe(maint_summary, use_container_width=True, hide_index=True)
+            
+            csv_maint_sum = maint_summary.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Summary Sheet", data=csv_maint_sum, file_name="Akshara_Maintenance_Summary.csv", mime="text/csv")
+            
+            st.divider()
+            
+            # C. Detailed History
+            st.write("#### 🧾 Detailed Repair History")
             st.dataframe(maint_df[['date', 'plate', 'work_type', 'cost', 'notes', 'odo']].sort_values(by="date", ascending=False), use_container_width=True, hide_index=True)
+            
+            csv_maint_hist = maint_df[['date', 'plate', 'work_type', 'cost', 'notes', 'odo']].to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Detailed History", data=csv_maint_hist, file_name="Akshara_Maintenance_History.csv", mime="text/csv")
+        else:
+            st.info("No maintenance records logged yet.")
 
     # 4. MANAGER CORRECTION CENTER
     with t4:
@@ -275,7 +303,6 @@ if st.session_state.role == "manager":
         backups_df = load_data("backups")
         if not backups_df.empty: st.dataframe(backups_df[['id', 'backup_date', 'event_type']].sort_values(by="id", ascending=False), use_container_width=True, hide_index=True)
     
-    # NEW TRUE FACTORY RESET
     with t6:
         st.error("⚠️ MASTER RESET - FACTORY WIPE")
         st.write("This will permanently erase ALL vehicles, ALL monthly fuel logs, and ALL maintenance history.")
@@ -285,18 +312,15 @@ if st.session_state.role == "manager":
             if confirm_reset == "RESET ALL":
                 trigger_auto_backup("Emergency Backup before Factory Wipe")
                 
-                # 1. Wipe Vehicles
                 if not df.empty and 'plate' in df.columns:
                     for p in df['plate'].unique(): 
                         supabase.table("vehicles").delete().eq("plate", p).execute()
                 
-                # 2. Wipe Logs
                 logs_df_wipe = load_data("logs")
                 if not logs_df_wipe.empty and 'id' in logs_df_wipe.columns:
                     for l_id in logs_df_wipe['id'].unique():
                         supabase.table("logs").delete().eq("id", int(l_id)).execute()
                         
-                # 3. Wipe Maintenance
                 maint_df_wipe = load_data("maintenance")
                 if not maint_df_wipe.empty and 'id' in maint_df_wipe.columns:
                     for m_id in maint_df_wipe['id'].unique():
