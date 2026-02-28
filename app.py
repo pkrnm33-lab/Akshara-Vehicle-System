@@ -80,21 +80,17 @@ if st.session_state.role == "manager":
             def style_mileage(v): return 'color: green; font-weight: bold' if v > 12 else 'color: red'
             st.dataframe(m_df[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
     
-    # 2. MONTHLY SHEET (UPDATED WITH FILTERS & KM)
+    # 2. MONTHLY SHEET
     with t2:
         st.subheader("📅 Monthly Diesel Sheet")
         logs_df = load_data("logs")
         if not logs_df.empty:
-            # Create a Month-Year column for the dropdown filter
             logs_df['date'] = pd.to_datetime(logs_df['date'], errors='coerce')
-            logs_df = logs_df.dropna(subset=['date']) # Remove any bad dates
+            logs_df = logs_df.dropna(subset=['date']) 
             logs_df['Month_Year'] = logs_df['date'].dt.strftime('%B %Y')
             
-            # Month Filter UI
             available_months = logs_df['Month_Year'].unique().tolist()
             selected_month = st.selectbox("🎯 Select Month to View:", available_months)
-            
-            # Filter Data
             filtered_logs = logs_df[logs_df['Month_Year'] == selected_month]
             
             if not filtered_logs.empty:
@@ -102,27 +98,21 @@ if st.session_state.role == "manager":
                 grand_total_liters = filtered_logs['liters'].sum()
                 grand_total_km = filtered_logs['km_run'].sum() if 'km_run' in filtered_logs.columns else 0
                 
-                # Top Metrics Update
                 c1, c2, c3 = st.columns(3)
                 c1.metric("💰 Total Cost", f"₹ {grand_total_cost:,.2f}")
                 c2.metric("🛢️ Total Diesel", f"{grand_total_liters:,.2f} L")
                 c3.metric("🛣️ Total KM Run", f"{grand_total_km} km")
                 st.divider()
 
-                # Group by Vehicle
                 report = filtered_logs.groupby(['plate', 'driver']).agg(
                     Total_KM=('km_run', 'sum'),
                     Total_Liters=('liters', 'sum'),
                     Total_Cost=('total_cost', 'sum')
                 ).reset_index()
                 
-                # Calculate True Monthly Mileage
                 report['Monthly Mileage'] = report.apply(lambda x: round(x['Total_KM'] / x['Total_Liters'], 2) if x['Total_Liters'] > 0 else 0, axis=1)
-                
-                # Rename for beautiful display
                 report.rename(columns={'Total_KM': 'Total KM', 'Total_Liters': 'Total Diesel (L)', 'Total_Cost': 'Total Cost (₹)'}, inplace=True)
                 
-                # Reorder columns
                 display_cols = ['plate', 'driver', 'Total KM', 'Total Diesel (L)', 'Monthly Mileage', 'Total Cost (₹)']
                 st.dataframe(report[display_cols], use_container_width=True, hide_index=True)
                 
@@ -142,7 +132,6 @@ if st.session_state.role == "manager":
                 current_v_odo = int(df[df['plate'] == m_plate]['odo'].values[0])
                 
                 c1, c2 = st.columns(2)
-                # Ensure date is visible and selectable!
                 m_date = c1.date_input("Date of Service", datetime.today()) 
                 m_type = c2.selectbox("Type of Work", ["Oil Change", "Mechanical Repair", "Electrical Repair", "Tyre Replacement", "Body Work", "Other"])
                 
@@ -165,19 +154,25 @@ if st.session_state.role == "manager":
             if not maint_df.empty:
                 st.dataframe(maint_df[['date', 'plate', 'work_type', 'cost', 'notes', 'odo']].sort_values(by="date", ascending=False), use_container_width=True, hide_index=True)
 
-    # 4. MANAGER CORRECTION CENTER (NEW)
+    # 4. MANAGER CORRECTION CENTER
     with t4:
         st.subheader("✏️ Data Correction Center")
         
-        # A. Edit Fleet
+        # A. Edit Fleet (UPDATED TO REQUIRE STARTING METER)
         with st.expander("🚌 Manage Fleet (Add / Edit / Delete Buses)"):
             action = st.radio("Action:", ["Add New Bus", "Edit Driver Name", "Delete Bus"], horizontal=True)
             if action == "Add New Bus":
                 p_n = st.text_input("Plate No").upper().strip()
                 d_n = st.text_input("Driver Name").upper().strip()
+                start_meter = st.number_input("Starting Odometer (VERY IMPORTANT)", min_value=0, value=0)
+                
                 if st.button("Save to Fleet"):
-                    supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0.0}).execute()
-                    st.success("Added!"); st.rerun()
+                    # Saves the starting meter so the first trip isn't massive!
+                    supabase.table("vehicles").upsert({
+                        "plate": p_n, "driver": d_n, "odo": int(start_meter), 
+                        "trip_km": int(start_meter), "fuel_liters": 0.0
+                    }).execute()
+                    st.success("Added with correct starting meter!"); st.rerun()
             elif action == "Edit Driver Name":
                 target_edit = st.selectbox("Select Bus", df['plate'].unique(), key="edit_driver")
                 curr_driver = df[df['plate'] == target_edit]['driver'].values[0]
@@ -193,7 +188,6 @@ if st.session_state.role == "manager":
 
         # B. Correct Live Odometer
         with st.expander("⏱️ Correct a Live Odometer"):
-            st.warning("Use this if a driver typed the wrong daily meter reading.")
             target_odo = st.selectbox("Select Bus", df['plate'].unique(), key="edit_odo")
             curr_odo = df[df['plate'] == target_odo]['odo'].values[0]
             new_odo_val = st.number_input("Correct Odometer Reading", value=int(curr_odo))
@@ -203,10 +197,8 @@ if st.session_state.role == "manager":
 
         # C. Correct Fuel Logs
         with st.expander("⛽ Correct a Past Fuel Fill-up Log"):
-            st.info("Fix mistakes in fuel amount, cost, or KM run in the Monthly Sheet.")
             c_logs_df = load_data("logs")
             if not c_logs_df.empty:
-                # Create a readable label for the dropdown
                 c_logs_df['label'] = c_logs_df['date'].astype(str) + " | " + c_logs_df['plate'] + " | " + c_logs_df['liters'].astype(str) + "L"
                 log_map = dict(zip(c_logs_df['label'], c_logs_df['id']))
                 
@@ -256,7 +248,7 @@ if st.session_state.role == "manager":
                     supabase.table("maintenance").delete().eq("id", int(selected_m_id)).execute()
                     st.success("Repair Deleted!"); st.rerun()
 
-    # 5. BACKUPS & 6. DANGER (unchanged)
+    # 5. BACKUPS & 6. DANGER
     with t5:
         st.subheader("☁️ Auto-Backup Archive")
         backups_df = load_data("backups")
@@ -277,6 +269,10 @@ else:
     trip_dist = v_data['odo'] - v_data['trip_km']
     trip_mileage = round(trip_dist / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
     
+    # SAFETY WARNING FOR DRIVERS
+    if trip_dist > 5000:
+        st.warning("⚠️ Trip distance looks unusually high! Did you type the odometer correctly?")
+    
     c1, c2 = st.columns(2)
     c1.metric("📌 Trip Distance", f"{trip_dist} km")
     c2.metric("⛽ Mileage", f"{trip_mileage} km/l")
@@ -295,14 +291,20 @@ else:
     if st.button("Log Fuel & Start New Trip"):
         if diesel > 0 and rate > 0:
             try:
-                supabase.table("logs").insert({
+                # Included explicit ODO capture for the logs
+                log_payload = {
                     "plate": v_data['plate'], "driver": v_data['driver'], "km_run": int(trip_dist),
                     "liters": float(diesel), "mileage": float(round(trip_dist / diesel, 2)),
                     "rate_per_ltr": float(rate), "total_cost": float(diesel * rate),
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }).execute()
+                }
+                try: log_payload["odo"] = int(v_data['odo']) # Saves ODO if column exists
+                except: pass
+                
+                supabase.table("logs").insert(log_payload).execute()
             except Exception as e:
                 st.error("Error saving log. Check your database columns.")
+                
             supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(diesel)}).eq("plate", v_data['plate']).execute()
             st.success(f"Fuel logged! Total Cost: ₹{diesel * rate}"); st.rerun()
         else:
