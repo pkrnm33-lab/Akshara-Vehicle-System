@@ -27,19 +27,12 @@ df = load_data("vehicles")
 def trigger_auto_backup(event_name):
     today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Safely try to get vehicle data
-    try:
-        v_data = supabase.table("vehicles").select("*").execute().data
-    except:
-        v_data = []
+    try: v_data = supabase.table("vehicles").select("*").execute().data
+    except: v_data = []
         
-    # Safely try to get logs data (This caused the crash earlier!)
-    try:
-        l_data = supabase.table("logs").select("*").execute().data
-    except:
-        l_data = []
+    try: l_data = supabase.table("logs").select("*").execute().data
+    except: l_data = []
     
-    # Safely try to save the backup
     try:
         supabase.table("backups").insert({
             "backup_date": today_str,
@@ -48,7 +41,7 @@ def trigger_auto_backup(event_name):
             "logs_data": json.dumps(l_data)
         }).execute()
     except:
-        pass # If backups table is missing, just ignore and don't crash
+        pass 
 
 # --- 4. LOGIN GATE ---
 if 'logged_in' not in st.session_state:
@@ -62,7 +55,6 @@ if 'logged_in' not in st.session_state:
                 st.session_state.role = "manager"
                 st.session_state.logged_in = True
                 
-                # DAILY AUTO-BACKUP CHECK
                 today_date = datetime.now().strftime("%Y-%m-%d")
                 backups_df = load_data("backups")
                 if backups_df.empty or not backups_df['backup_date'].astype(str).str.contains(today_date).any():
@@ -104,15 +96,29 @@ if st.session_state.role == "manager":
             monthly_logs = logs_df[(logs_df['date'].dt.month == current_month) & (logs_df['date'].dt.year == current_year)]
             
             if not monthly_logs.empty:
-                report = monthly_logs.groupby(['plate', 'driver'])['liters'].sum().reset_index()
-                report.rename(columns={'liters': 'Total Diesel (Liters)'}, inplace=True)
+                # --- NEW: GRAND TOTAL CALCULATIONS ---
+                if 'total_cost' in monthly_logs.columns:
+                    grand_total_cost = monthly_logs['total_cost'].sum()
+                    grand_total_liters = monthly_logs['liters'].sum()
+                    
+                    c1, c2 = st.columns(2)
+                    c1.metric("💰 Total Fleet Cost (This Month)", f"₹ {grand_total_cost:,.2f}")
+                    c2.metric("🛢️ Total Diesel (This Month)", f"{grand_total_liters:,.2f} L")
+                    st.divider()
+
+                    report = monthly_logs.groupby(['plate', 'driver'])[['liters', 'total_cost']].sum().reset_index()
+                    report.rename(columns={'liters': 'Total Diesel (Liters)', 'total_cost': 'Total Cost (₹)'}, inplace=True)
+                else:
+                    report = monthly_logs.groupby(['plate', 'driver'])['liters'].sum().reset_index()
+                    report.rename(columns={'liters': 'Total Diesel (Liters)'}, inplace=True)
+                
                 st.dataframe(report, use_container_width=True, hide_index=True)
                 csv = report.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Download Monthly Sheet", data=csv, file_name=f"Akshara_Diesel_{current_month}_{current_year}.csv", mime="text/csv")
             else:
                 st.info("No fuel logged yet for this month.")
         else:
-            st.warning("⚠️ 'logs' table is missing in Supabase. You need it to track monthly diesel!")
+            st.warning("⚠️ 'logs' table is empty or missing.")
 
     with t3:
         st.subheader("Enroll New Bus")
@@ -165,9 +171,10 @@ else:
     st.divider()
 
     diesel = st.number_input("Diesel Liters Added", min_value=0.0, value=0.0)
+    rate = st.number_input("Rate per Liter (₹)", min_value=0.0, value=0.0)
+    
     if st.button("Log Fuel & Start New Trip"):
-        if diesel > 0:
-            # Try to save to logs (for monthly sheet)
+        if diesel > 0 and rate > 0:
             try:
                 supabase.table("logs").insert({
                     "plate": v_data['plate'],
@@ -175,15 +182,17 @@ else:
                     "km_run": int(trip_dist),
                     "liters": float(diesel),
                     "mileage": float(round(trip_dist / diesel, 2)) if diesel > 0 else 0,
+                    "rate_per_ltr": float(rate),
+                    "total_cost": float(diesel * rate),
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }).execute()
-            except:
-                pass # Ignore if logs table is missing
+            except Exception as e:
+                st.error(f"Error saving log. Did you add 'rate_per_ltr' and 'total_cost' to Supabase? Error: {e}")
             
             supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(diesel)}).eq("plate", v_data['plate']).execute()
-            st.success("Fuel logged successfully!"); st.rerun()
+            st.success(f"Fuel logged! Total Cost: ₹{diesel * rate}"); st.rerun()
         else:
-            st.error("Please enter liters.")
+            st.error("Please enter both Liters and the Rate per Liter.")
 
 if st.sidebar.button("Logout"):
     st.session_state.clear(); st.rerun()
