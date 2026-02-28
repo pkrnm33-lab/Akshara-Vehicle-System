@@ -2,12 +2,9 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime
+import json
 
-# --- 1. BRANDING & CONFIG ---
-LOGO_IMAGE = "1000000180.jpg" 
-st.set_page_config(page_title="Akshara Fleet Portal", page_icon="🚌", layout="wide")
-
-# --- 2. SECURE CONNECTION ---
+# --- 1. SECURE CONNECTION ---
 try:
     URL = st.secrets["SUPABASE_URL"]
     KEY = st.secrets["SUPABASE_KEY"]
@@ -16,174 +13,171 @@ except Exception as e:
     st.error("⚠️ Connection Error. Check Streamlit Secrets.")
     st.stop()
 
-# --- 3. HIGH-VISIBILITY NEON STYLING ---
-st.markdown(f"""
-    <style>
-    .stApp {{ background-color: #0E1117 !important; }}
-    h1, h2, h3, p, span, label, .stMarkdown {{ color: #FFFFFF !important; }}
-    .branded-header {{ border-bottom: 4px solid #4CAF50; padding: 10px 0 20px 0; margin-bottom: 30px; text-align: center; background-color: #1A1C24; }}
-    div[data-testid="stMetricValue"] > div {{ color: #39FF14 !important; font-weight: 800 !important; }}
-    div.stButton > button {{ background-color: #2E7D32 !important; color: #FFFFFF !important; border-radius: 8px; font-weight: 700; padding: 12px 20px; width: 100%; }}
-    .reset-btn button {{ background-color: #FFD700 !important; color: #000000 !important; }}
-    .delete-btn button {{ background-color: #FF4B4B !important; color: #FFFFFF !important; }}
-    .total-card {{ background: linear-gradient(135deg, #1e3c72, #2a5298); padding: 25px; border-radius: 15px; text-align: center; margin-bottom: 25px; border: 2px solid #FFD700; }}
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 4. DATA LOADER (FIXED FOR ALL ERRORS) ---
-def load_data():
-    df_v = pd.DataFrame(columns=['plate', 'driver', 'odo', 'trip_km', 'fuel_liters'])
-    df_f = pd.DataFrame(columns=['id', 'created_at', 'plate', 'driver', 'liters', 'price'])
-    df_m = pd.DataFrame(columns=['id', 'created_at', 'plate', 'service_type', 'cost', 'service_date'])
+# --- 2. DATA LOADER ---
+def load_data(table_name):
     try:
-        v_res = supabase.table("vehicles").select("*").execute()
-        if v_res.data: df_v = pd.DataFrame(v_res.data)
-        f_res = supabase.table("fuel_logs").select("*").execute()
-        if f_res.data: 
-            df_f = pd.DataFrame(f_res.data)
-            df_f['created_at'] = pd.to_datetime(df_f['created_at'])
-        m_res = supabase.table("maintenance_logs").select("*").execute()
-        if m_res.data:
-            df_m = pd.DataFrame(m_res.data)
-            df_m['display_date'] = pd.to_datetime(df_m.get('service_date', df_m['created_at'])).dt.date
-        return df_v, df_f, df_m
-    except: return df_v, df_f, df_m
+        res = supabase.table(table_name).select("*").execute()
+        return pd.DataFrame(res.data)
+    except:
+        return pd.DataFrame()
 
-df_v, df_f, df_m = load_data()
+df = load_data("vehicles")
 
-# --- 5. SHARED HEADER ---
-def draw_header(title=""):
-    st.markdown('<div class="branded-header">', unsafe_allow_html=True)
-    try: st.image(LOGO_IMAGE, width=250)
-    except: st.markdown('<h1 style="color:#FFFFFF;">AKSHARA PUBLIC SCHOOL</h1>', unsafe_allow_html=True)
-    if title: st.markdown(f'<h2 style="color:#4CAF50; font-size:22px;">{title}</h2>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+# --- 3. AUTO-BACKUP ENGINE ---
+def trigger_auto_backup(event_name):
+    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Fetch current data to backup
+    v_data = supabase.table("vehicles").select("*").execute().data
+    l_data = supabase.table("logs").select("*").execute().data
+    
+    # Save as JSON text in the backups table
+    supabase.table("backups").insert({
+        "backup_date": today_str,
+        "event_type": event_name,
+        "vehicles_data": json.dumps(v_data),
+        "logs_data": json.dumps(l_data)
+    }).execute()
 
-# --- 6. LOGIN ---
+# --- 4. LOGIN GATE ---
 if 'logged_in' not in st.session_state:
-    draw_header("FLEET LOGIN")
-    user_input = st.text_input("Username").upper().strip()
+    st.markdown('<div style="background-color:#FFD700;padding:15px;border-radius:15px;margin-bottom:20px;"><h1 style="color:#000080;text-align:center;">🚌 AKSHARA PUBLIC SCHOOL</h1></div>', unsafe_allow_html=True)
+    user_input = st.text_input("👤 Enter Username").upper().strip()
+    
     if user_input == "MANAGER":
-        pw = st.text_input("Password", type="password")
-        if st.button("Login"):
-            if pw == "Akshara@2026": 
-                st.session_state.role = "manager"; st.session_state.logged_in = True; st.rerun()
-            else: st.error("Wrong Password")
+        password = st.text_input("🔐 Manager Password", type="password")
+        if st.button("Login as Manager"):
+            if password == "Akshara@2026": 
+                st.session_state.role = "manager"
+                st.session_state.logged_in = True
+                
+                # DAILY AUTO-BACKUP CHECK
+                today_date = datetime.now().strftime("%Y-%m-%d")
+                backups_df = load_data("backups")
+                if backups_df.empty or not backups_df['backup_date'].str.contains(today_date).any():
+                    trigger_auto_backup("Daily Auto-Backup")
+                    
+                st.rerun()
+            else:
+                st.error("❌ Invalid Password")
     else:
         if st.button("Login as Driver"):
-            if not df_v.empty and user_input in df_v['driver'].str.upper().str.strip().values:
+            if not df.empty and user_input in df['driver'].str.upper().str.strip().values:
                 st.session_state.role = "driver"; st.session_state.user = user_input; st.session_state.logged_in = True; st.rerun()
-            else: st.warning("Driver not found.")
+            else:
+                st.error("❌ Driver not found in fleet.")
     st.stop()
 
-# --- 7. MANAGER PORTAL (FULL EDIT OPTIONS) ---
+# --- 5. MANAGER DASHBOARD ---
 if st.session_state.role == "manager":
-    draw_header("🏆 MANAGER PORTAL")
-    t1, t2, t3, t4 = st.tabs(["📊 Performance", "🛠️ Maintenance", "➕ Add Vehicle", "⚙️ Admin Edit"])
+    st.markdown('<h2 style="color:#000080;text-align:center;">🏆 Manager Dashboard</h2>', unsafe_allow_html=True)
+    t1, t2, t3, t4, t5 = st.tabs(["📊 Live Fleet", "📅 Monthly Sheet", "➕ Add Vehicle", "☁️ Cloud Backups", "🚨 DANGER ZONE"])
     
     with t1:
-        if not df_v.empty:
-            report = df_v.copy()
-            report['Trip KM'] = report['odo'] - report['trip_km']
-            report['Mileage'] = report.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
+        if not df.empty:
+            m_df = df.copy()
+            m_df['Trip KM'] = m_df['odo'] - m_df['trip_km']
+            m_df['Mileage'] = m_df.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
             
-            f_tot, m_tot = 0, 0
-            if not df_f.empty:
-                df_f['Cost'] = df_f['liters'] * df_f['price']
-                f_tot = df_f['Cost'].sum()
-                f_sums = df_f.groupby('plate')['Cost'].sum().reset_index().rename(columns={'Cost': 'Fuel ₹'})
-                report = report.merge(f_sums, on='plate', how='left').fillna(0)
-            else: report['Fuel ₹'] = 0
-
-            if not df_m.empty:
-                m_tot = df_m['cost'].sum()
-                m_sums = df_m.groupby('plate')['cost'].sum().reset_index().rename(columns={'cost': 'Maint ₹'})
-                report = report.merge(m_sums, on='plate', how='left').fillna(0)
-            else: report['Maint ₹'] = 0
-
-            st.markdown(f'<div class="total-card"><h3 style="margin:0; color:#FFD700;">💰 TOTAL SCHOOL EXPENDITURE</h3><h1 style="margin:0; color:#FFFFFF;">₹ {f_tot + m_tot:,.2f}</h1><p style="margin:0; font-size:14px;">Diesel: ₹{f_tot:,.0f} | Maintenance: ₹{m_tot:,.0f}</p></div>', unsafe_allow_html=True)
-            st.write("### 🚌 Fleet Status")
-            st.dataframe(report[['plate', 'driver', 'odo', 'Trip KM', 'Mileage', 'Fuel ₹', 'Maint ₹']].rename(columns={'plate': 'Bus', 'odo': 'Odo'}), use_container_width=True, hide_index=True)
-
+            def style_mileage(v):
+                return 'color: green; font-weight: bold' if v > 12 else 'color: red'
+            st.dataframe(m_df[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
+    
     with t2:
-        st.subheader("🛠️ Record New Maintenance")
-        m_bus = st.selectbox("Select Vehicle", df_v['plate'].unique(), key="m_mgr")
-        m_date = st.date_input("Service Date", value=datetime.today())
-        m_type = st.text_input("Work Done (e.g. Engine Oil)")
-        m_cost = st.number_input("Cost (₹)", min_value=0.0)
-        if st.button("Save Maintenance"):
-            if m_type and m_cost > 0:
-                supabase.table("maintenance_logs").insert({"plate": m_bus, "service_type": m_type, "cost": m_cost, "service_date": str(m_date)}).execute()
-                st.success("Saved!"); st.rerun()
-        
-        st.divider()
-        st.write(f"### 📜 History for {m_bus}")
-        if not df_m.empty:
-            bus_m = df_m[df_m['plate'] == m_bus].sort_values('display_date', ascending=False)
-            st.dataframe(bus_m[['display_date', 'service_type', 'cost']].rename(columns={'display_date': 'Date', 'service_type': 'Work', 'cost': 'Amount'}), use_container_width=True, hide_index=True)
+        st.subheader("📅 Monthly Diesel Sheet (Vehicle Wise)")
+        logs_df = load_data("logs")
+        if not logs_df.empty:
+            logs_df['date'] = pd.to_datetime(logs_df['date'])
+            current_month = datetime.now().month
+            current_year = datetime.now().year
+            monthly_logs = logs_df[(logs_df['date'].dt.month == current_month) & (logs_df['date'].dt.year == current_year)]
+            
+            if not monthly_logs.empty:
+                report = monthly_logs.groupby(['plate', 'driver'])['liters'].sum().reset_index()
+                report.rename(columns={'liters': 'Total Diesel (Liters)'}, inplace=True)
+                st.dataframe(report, use_container_width=True, hide_index=True)
+                csv = report.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Monthly Sheet", data=csv, file_name=f"Akshara_Diesel_{current_month}_{current_year}.csv", mime="text/csv")
+            else:
+                st.info("No fuel logged yet for this month.")
 
+    with t3:
+        st.subheader("Enroll New Bus")
+        p_n = st.text_input("Plate No").upper().strip()
+        d_n = st.text_input("Driver Name").upper().strip()
+        if st.button("Save to Fleet"):
+            supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0.0}).execute()
+            st.success(f"{p_n} Added!"); st.rerun()
+
+    # --- CLOUD BACKUPS TAB ---
     with t4:
-        st.subheader("⚙️ Admin Edit Panel")
-        target = st.selectbox("Select Bus to Fix", df_v['plate'].unique())
-        v_info = df_v[df_v['plate'] == target].iloc[0]
+        st.subheader("☁️ Auto-Backup Archive")
+        st.write("The system automatically saves a copy of your fleet data daily and before any reset.")
+        backups_df = load_data("backups")
+        if not backups_df.empty:
+            st.dataframe(backups_df[['id', 'backup_date', 'event_type']].sort_values(by="id", ascending=False), use_container_width=True, hide_index=True)
+        else:
+            st.info("No backups created yet. They will appear automatically.")
+
+    # --- MASTER RESET BUTTON ---
+    with t5:
+        st.error("⚠️ MASTER RESET")
+        st.write("This will permanently erase **ALL** vehicles and drivers from the live fleet dashboard.")
+        confirm = st.text_input("Type 'RESET ALL' to confirm your action:")
         
-        st.write("#### 1. Correct Odometer / Reset Trip")
-        ca, cb = st.columns(2)
-        with ca:
-            new_odo = st.number_input("Odometer Fix", value=int(v_info['odo']))
-            if st.button("Update Odo"):
-                supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", target).execute(); st.rerun()
-        with cb:
-            st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
-            if st.button(f"Reset {target} Trip"):
-                supabase.table("vehicles").update({"trip_km": int(v_info['odo']), "fuel_liters": 0}).eq("plate", target).execute(); st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        if st.button("🚨 ERASE TOTAL VEHICLE DETAILS"):
+            if confirm == "RESET ALL":
+                if not df.empty:
+                    # 1. TRIGGER EMERGENCY AUTO-BACKUP
+                    trigger_auto_backup("Pre-Reset Emergency Backup")
+                    
+                    # 2. ERASE ALL VEHICLES
+                    for plate in df['plate'].unique():
+                        supabase.table("vehicles").delete().eq("plate", plate).execute()
+                    
+                    st.success("ALL VEHICLE DETAILS ERASED. An emergency backup was saved to the Cloud Backups tab.")
+                    st.rerun()
+            else:
+                st.error("You must type 'RESET ALL' exactly to confirm this action.")
 
-        st.divider()
-        st.write("#### 2. Edit Diesel / Maintenance Logs")
-        sub_t1, sub_t2 = st.tabs(["Edit Diesel", "Edit Maint"])
-        with sub_t1:
-            if not df_f.empty and target in df_f['plate'].values:
-                sel_f = st.selectbox("Select Diesel Entry", df_f[df_f['plate']==target]['id'])
-                f_data = df_f[df_f['id']==sel_f].iloc[0]
-                fl, fp = st.columns(2)
-                nl, np = fl.number_input("Liters", value=float(f_data['liters'])), fp.number_input("Price", value=float(f_data['price']))
-                if st.button("Update Fuel"):
-                    supabase.table("fuel_logs").update({"liters": nl, "price": np}).eq("id", sel_f).execute(); st.rerun()
-        with sub_t2:
-            if not df_m.empty and target in df_m['plate'].values:
-                sel_m = st.selectbox("Select Maint Entry", df_m[df_m['plate']==target]['id'])
-                m_data = df_m[df_m['id']==sel_m].iloc[0]
-                mw = st.text_input("Work Done", value=m_data['service_type'])
-                mc = st.number_input("Cost", value=float(m_data['cost']))
-                if st.button("Update Maint"):
-                    supabase.table("maintenance_logs").update({"service_type": mw, "cost": mc}).eq("id", sel_m).execute(); st.rerun()
-
-# --- 8. DRIVER INTERFACE (RESTORING MILEAGE) ---
+# --- 6. DRIVER INTERFACE ---
 else:
-    draw_header(f"Welcome, {st.session_state.user}")
-    v_data = df_v[df_v['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
+    st.markdown(f'<h2 style="color:#000080;text-align:center;">👋 Welcome, {st.session_state.user}</h2>', unsafe_allow_html=True)
+    v_data = df[df['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
     
-    # Restored Mileage Metrics
-    trip_d = v_data['odo'] - v_data['trip_km']
-    trip_m = round(trip_d / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
+    trip_dist = v_data['odo'] - v_data['trip_km']
+    trip_mileage = round(trip_dist / v_data['fuel_liters'], 2) if v_data['fuel_liters'] > 0 else 0
+    
     c1, c2 = st.columns(2)
-    c1.metric("Trip Distance", f"{trip_d} km")
-    c2.metric("Efficiency (Mileage)", f"{trip_m} km/l")
-    
-    st.divider(); st.subheader("Update Odometer")
-    new_o = st.number_input("Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
-    if st.button("Save Reading"):
-        supabase.table("vehicles").update({"odo": int(new_o)}).eq("plate", v_data['plate']).execute(); st.success("Saved!"); st.rerun()
+    c1.metric("📌 Trip Distance", f"{trip_dist} km")
+    c2.metric("⛽ Mileage", f"{trip_mileage} km/l")
+    st.divider()
 
-    st.divider(); st.subheader("Log Diesel")
-    la, lb = st.columns(2)
-    with la: li = st.number_input("Liters Added", min_value=0.0)
-    with lb: pr = st.number_input("Price/Liter (₹)", value=96.20)
+    st.subheader("1. Update Odometer")
+    new_odo = st.number_input("Current Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
+    if st.button("Update Odometer"):
+        supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
+        st.success("Odometer updated!"); st.rerun()
+
+    st.divider()
+
+    st.subheader("2. Fuel Fill-up")
+    diesel = st.number_input("Diesel Liters Added", min_value=0.0, value=0.0)
     if st.button("Log Fuel & Start New Trip"):
-        if li > 0:
-            supabase.table("fuel_logs").insert({"plate": v_data['plate'], "driver": st.session_state.user, "liters": float(li), "price": float(pr)}).execute()
-            supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(li)}).eq("plate", v_data['plate']).execute()
-            st.success("New Trip Logged!"); st.rerun()
+        if diesel > 0:
+            supabase.table("logs").insert({
+                "plate": v_data['plate'],
+                "driver": v_data['driver'],
+                "km_run": int(trip_dist),
+                "liters": float(diesel),
+                "mileage": float(round(trip_dist / diesel, 2)) if diesel > 0 else 0,
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }).execute()
+            
+            supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(diesel)}).eq("plate", v_data['plate']).execute()
+            st.success("Fuel logged successfully!"); st.rerun()
+        else:
+            st.error("Please enter liters.")
 
-if st.sidebar.button("Logout"): st.session_state.clear(); st.rerun()
+if st.sidebar.button("Logout"):
+    st.session_state.clear(); st.rerun()
