@@ -74,8 +74,11 @@ if 'logged_in' not in st.session_state:
 # --- 5. MANAGER DASHBOARD ---
 if st.session_state.role == "manager":
     st.markdown('<h2 style="color:#000080;text-align:center;">🏆 Manager Dashboard</h2>', unsafe_allow_html=True)
-    t1, t2, t3, t4, t5 = st.tabs(["📊 Live Fleet", "📅 Monthly Sheet", "➕ Add Vehicle", "☁️ Cloud Backups", "🚨 DANGER ZONE"])
     
+    # NEW TABS ADDED
+    t1, t2, t3, t4, t5, t6 = st.tabs(["📊 Live", "📅 Monthly", "🔧 Service", "✏️ Add/Edit", "☁️ Backups", "🚨 DANGER"])
+    
+    # 1. LIVE FLEET
     with t1:
         if not df.empty:
             m_df = df.copy()
@@ -86,6 +89,7 @@ if st.session_state.role == "manager":
                 return 'color: green; font-weight: bold' if v > 12 else 'color: red'
             st.dataframe(m_df[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
     
+    # 2. MONTHLY SHEET
     with t2:
         st.subheader("📅 Monthly Diesel Sheet")
         logs_df = load_data("logs")
@@ -96,14 +100,13 @@ if st.session_state.role == "manager":
             monthly_logs = logs_df[(logs_df['date'].dt.month == current_month) & (logs_df['date'].dt.year == current_year)]
             
             if not monthly_logs.empty:
-                # --- NEW: GRAND TOTAL CALCULATIONS ---
                 if 'total_cost' in monthly_logs.columns:
                     grand_total_cost = monthly_logs['total_cost'].sum()
                     grand_total_liters = monthly_logs['liters'].sum()
                     
                     c1, c2 = st.columns(2)
-                    c1.metric("💰 Total Fleet Cost (This Month)", f"₹ {grand_total_cost:,.2f}")
-                    c2.metric("🛢️ Total Diesel (This Month)", f"{grand_total_liters:,.2f} L")
+                    c1.metric("💰 Total Fleet Cost", f"₹ {grand_total_cost:,.2f}")
+                    c2.metric("🛢️ Total Diesel", f"{grand_total_liters:,.2f} L")
                     st.divider()
 
                     report = monthly_logs.groupby(['plate', 'driver'])[['liters', 'total_cost']].sum().reset_index()
@@ -117,18 +120,57 @@ if st.session_state.role == "manager":
                 st.download_button("📥 Download Monthly Sheet", data=csv, file_name=f"Akshara_Diesel_{current_month}_{current_year}.csv", mime="text/csv")
             else:
                 st.info("No fuel logged yet for this month.")
-        else:
-            st.warning("⚠️ 'logs' table is empty or missing.")
 
+    # 3. MAINTENANCE (NEW)
     with t3:
-        st.subheader("Enroll New Bus")
-        p_n = st.text_input("Plate No").upper().strip()
-        d_n = st.text_input("Driver Name").upper().strip()
-        if st.button("Save to Fleet"):
-            supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0.0}).execute()
-            st.success(f"{p_n} Added!"); st.rerun()
+        st.subheader("🔧 Fleet Maintenance Status")
+        st.write("Calculates next service assuming an oil change is needed every **5,000 km**.")
+        if not df.empty:
+            serv_df = df.copy()
+            # Math logic: Finds the next multiple of 5000 based on current odometer
+            serv_df['Next Service (KM)'] = ((serv_df['odo'] // 5000) + 1) * 5000
+            serv_df['KM Until Service'] = serv_df['Next Service (KM)'] - serv_df['odo']
+            
+            def highlight_service(val):
+                return 'color: red; font-weight: bold' if val <= 500 else 'color: green'
+                
+            st.dataframe(serv_df[['plate', 'driver', 'odo', 'Next Service (KM)', 'KM Until Service']].style.map(highlight_service, subset=['KM Until Service']), use_container_width=True, hide_index=True)
 
+    # 4. ADD / EDIT / DELETE (NEW CONSOLIDATED TAB)
     with t4:
+        st.subheader("✏️ Manage Vehicles")
+        action = st.radio("What would you like to do?", ["➕ Add New Bus", "📝 Edit Existing Bus", "❌ Delete Bus"], horizontal=True)
+        st.divider()
+        
+        if action == "➕ Add New Bus":
+            p_n = st.text_input("Plate No").upper().strip()
+            d_n = st.text_input("Driver Name").upper().strip()
+            if st.button("Save to Fleet"):
+                supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0.0}).execute()
+                st.success(f"{p_n} Added!"); st.rerun()
+                
+        elif action == "📝 Edit Existing Bus":
+            if not df.empty:
+                target_edit = st.selectbox("Select Bus to Edit", df['plate'].unique())
+                curr_driver = df[df['plate'] == target_edit]['driver'].values[0]
+                
+                new_driver = st.text_input("Update Driver Name", value=curr_driver).upper().strip()
+                if st.button("Save Changes"):
+                    supabase.table("vehicles").update({"driver": new_driver}).eq("plate", target_edit).execute()
+                    st.success(f"Driver for {target_edit} updated to {new_driver}!"); st.rerun()
+            else:
+                st.info("No vehicles to edit.")
+                
+        elif action == "❌ Delete Bus":
+            if not df.empty:
+                target_del = st.selectbox("Select Bus to Delete", df['plate'].unique())
+                if st.checkbox(f"Confirm Delete {target_del}?"):
+                    if st.button("Delete Permanently"):
+                        supabase.table("vehicles").delete().eq("plate", target_del).execute()
+                        st.success("Vehicle Deleted!"); st.rerun()
+
+    # 5. BACKUPS
+    with t5:
         st.subheader("☁️ Auto-Backup Archive")
         backups_df = load_data("backups")
         if not backups_df.empty:
@@ -136,7 +178,8 @@ if st.session_state.role == "manager":
         else:
             st.info("No backups created yet.")
 
-    with t5:
+    # 6. DANGER ZONE
+    with t6:
         st.error("⚠️ MASTER RESET")
         confirm = st.text_input("Type 'RESET ALL' to confirm your action:")
         if st.button("🚨 ERASE TOTAL VEHICLE DETAILS"):
