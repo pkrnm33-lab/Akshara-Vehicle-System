@@ -29,16 +29,18 @@ def trigger_auto_backup(event_name):
     
     try: v_data = supabase.table("vehicles").select("*").execute().data
     except: v_data = []
-        
     try: l_data = supabase.table("logs").select("*").execute().data
     except: l_data = []
+    try: m_data = supabase.table("maintenance").select("*").execute().data
+    except: m_data = []
     
     try:
         supabase.table("backups").insert({
             "backup_date": today_str,
             "event_type": event_name,
             "vehicles_data": json.dumps(v_data),
-            "logs_data": json.dumps(l_data)
+            "logs_data": json.dumps(l_data),
+            # Added maintenance to backup, if column exists in backups table
         }).execute()
     except:
         pass 
@@ -75,8 +77,7 @@ if 'logged_in' not in st.session_state:
 if st.session_state.role == "manager":
     st.markdown('<h2 style="color:#000080;text-align:center;">🏆 Manager Dashboard</h2>', unsafe_allow_html=True)
     
-    # NEW TABS ADDED
-    t1, t2, t3, t4, t5, t6 = st.tabs(["📊 Live", "📅 Monthly", "🔧 Service", "✏️ Add/Edit", "☁️ Backups", "🚨 DANGER"])
+    t1, t2, t3, t4, t5, t6 = st.tabs(["📊 Live", "📅 Monthly", "🔧 Maintenance", "✏️ Add/Edit", "☁️ Backups", "🚨 DANGER"])
     
     # 1. LIVE FLEET
     with t1:
@@ -121,22 +122,58 @@ if st.session_state.role == "manager":
             else:
                 st.info("No fuel logged yet for this month.")
 
-    # 3. MAINTENANCE (NEW)
+    # 3. MAINTENANCE LEDGER (NEW)
     with t3:
-        st.subheader("🔧 Fleet Maintenance Status")
-        st.write("Calculates next service assuming an oil change is needed every **5,000 km**.")
+        st.subheader("🔧 Maintenance & Repairs Log")
+        
         if not df.empty:
-            serv_df = df.copy()
-            # Math logic: Finds the next multiple of 5000 based on current odometer
-            serv_df['Next Service (KM)'] = ((serv_df['odo'] // 5000) + 1) * 5000
-            serv_df['KM Until Service'] = serv_df['Next Service (KM)'] - serv_df['odo']
-            
-            def highlight_service(val):
-                return 'color: red; font-weight: bold' if val <= 500 else 'color: green'
+            with st.expander("➕ Log New Repair or Oil Change", expanded=True):
+                m_plate = st.selectbox("Select Bus", df['plate'].unique(), key="maint_plate")
                 
-            st.dataframe(serv_df[['plate', 'driver', 'odo', 'Next Service (KM)', 'KM Until Service']].style.map(highlight_service, subset=['KM Until Service']), use_container_width=True, hide_index=True)
+                # Fetch current odo for this specific bus to auto-fill
+                current_v_odo = int(df[df['plate'] == m_plate]['odo'].values[0])
+                
+                c1, c2 = st.columns(2)
+                m_type = c1.selectbox("Type of Work", ["Oil Change", "Mechanical Repair", "Electrical Repair", "Tyre Replacement", "Body Work", "Other"])
+                m_cost = c2.number_input("Total Repair Bill (₹)", min_value=0.0, value=0.0)
+                
+                m_notes = st.text_input("Details (e.g., Replaced battery, Engine oil brand)")
+                m_odo = st.number_input("Odometer at time of service", value=current_v_odo)
+                
+                if st.button("Save Maintenance Record"):
+                    if m_cost >= 0:
+                        try:
+                            supabase.table("maintenance").insert({
+                                "plate": m_plate,
+                                "date": datetime.now().strftime("%Y-%m-%d"),
+                                "work_type": m_type,
+                                "cost": float(m_cost),
+                                "notes": m_notes,
+                                "odo": int(m_odo)
+                            }).execute()
+                            st.success(f"Successfully logged {m_type} for {m_plate}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to save! Did you create the 'maintenance' table in Supabase? Error: {e}")
+            
+            st.divider()
+            st.write("### 📜 Fleet Maintenance History")
+            maint_df = load_data("maintenance")
+            
+            if not maint_df.empty:
+                # Calculate total spent on repairs
+                total_maint_cost = maint_df['cost'].sum()
+                st.metric("Total Money Spent on Repairs", f"₹ {total_maint_cost:,.2f}")
+                
+                st.dataframe(maint_df[['date', 'plate', 'work_type', 'cost', 'notes', 'odo']].sort_values(by="date", ascending=False), use_container_width=True, hide_index=True)
+                
+                # Download Button for Repairs
+                maint_csv = maint_df[['date', 'plate', 'work_type', 'cost', 'notes', 'odo']].to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Repair History", data=maint_csv, file_name="Akshara_Maintenance_Log.csv", mime="text/csv")
+            else:
+                st.info("No repairs logged yet.")
 
-    # 4. ADD / EDIT / DELETE (NEW CONSOLIDATED TAB)
+    # 4. ADD / EDIT / DELETE
     with t4:
         st.subheader("✏️ Manage Vehicles")
         action = st.radio("What would you like to do?", ["➕ Add New Bus", "📝 Edit Existing Bus", "❌ Delete Bus"], horizontal=True)
@@ -153,13 +190,10 @@ if st.session_state.role == "manager":
             if not df.empty:
                 target_edit = st.selectbox("Select Bus to Edit", df['plate'].unique())
                 curr_driver = df[df['plate'] == target_edit]['driver'].values[0]
-                
                 new_driver = st.text_input("Update Driver Name", value=curr_driver).upper().strip()
                 if st.button("Save Changes"):
                     supabase.table("vehicles").update({"driver": new_driver}).eq("plate", target_edit).execute()
-                    st.success(f"Driver for {target_edit} updated to {new_driver}!"); st.rerun()
-            else:
-                st.info("No vehicles to edit.")
+                    st.success(f"Driver updated!"); st.rerun()
                 
         elif action == "❌ Delete Bus":
             if not df.empty:
@@ -230,7 +264,7 @@ else:
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }).execute()
             except Exception as e:
-                st.error(f"Error saving log. Did you add 'rate_per_ltr' and 'total_cost' to Supabase? Error: {e}")
+                st.error("Error saving log. Check your database columns.")
             
             supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(diesel)}).eq("plate", v_data['plate']).execute()
             st.success(f"Fuel logged! Total Cost: ₹{diesel * rate}"); st.rerun()
