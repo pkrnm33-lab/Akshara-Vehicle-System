@@ -77,7 +77,11 @@ if st.session_state.role == "manager":
             m_df = df.copy()
             m_df['Trip KM'] = m_df['odo'] - m_df['trip_km']
             m_df['Mileage'] = m_df.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
+            
+            # Clean formatting for Live Table
+            m_df['Mileage'] = m_df['Mileage'].astype(float).round(2)
             def style_mileage(v): return 'color: green; font-weight: bold' if v > 12 else 'color: red'
+            
             st.dataframe(m_df[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
         else:
             st.info("Fleet is empty. Please add a vehicle.")
@@ -270,13 +274,38 @@ if st.session_state.role == "manager":
         st.subheader("☁️ Auto-Backup Archive")
         backups_df = load_data("backups")
         if not backups_df.empty: st.dataframe(backups_df[['id', 'backup_date', 'event_type']].sort_values(by="id", ascending=False), use_container_width=True, hide_index=True)
+    
+    # NEW TRUE FACTORY RESET
     with t6:
-        st.error("⚠️ MASTER RESET")
-        if st.button("🚨 ERASE TOTAL VEHICLE DETAILS"):
-            if st.text_input("Type 'RESET ALL':") == "RESET ALL":
-                trigger_auto_backup("Emergency Backup")
-                for p in df['plate'].unique(): supabase.table("vehicles").delete().eq("plate", p).execute()
+        st.error("⚠️ MASTER RESET - FACTORY WIPE")
+        st.write("This will permanently erase ALL vehicles, ALL monthly fuel logs, and ALL maintenance history.")
+        confirm_reset = st.text_input("Type 'RESET ALL' to confirm your action:")
+        
+        if st.button("🚨 ERASE ENTIRE SYSTEM"):
+            if confirm_reset == "RESET ALL":
+                trigger_auto_backup("Emergency Backup before Factory Wipe")
+                
+                # 1. Wipe Vehicles
+                if not df.empty and 'plate' in df.columns:
+                    for p in df['plate'].unique(): 
+                        supabase.table("vehicles").delete().eq("plate", p).execute()
+                
+                # 2. Wipe Logs
+                logs_df_wipe = load_data("logs")
+                if not logs_df_wipe.empty and 'id' in logs_df_wipe.columns:
+                    for l_id in logs_df_wipe['id'].unique():
+                        supabase.table("logs").delete().eq("id", int(l_id)).execute()
+                        
+                # 3. Wipe Maintenance
+                maint_df_wipe = load_data("maintenance")
+                if not maint_df_wipe.empty and 'id' in maint_df_wipe.columns:
+                    for m_id in maint_df_wipe['id'].unique():
+                        supabase.table("maintenance").delete().eq("id", int(m_id)).execute()
+
+                st.success("FACTORY RESET COMPLETE! Live data, Monthly sheets, and Maintenance are all completely empty.")
                 st.rerun()
+            else:
+                st.error("You must type 'RESET ALL' exactly in the box above before clicking the button.")
 
 # --- 6. DRIVER INTERFACE ---
 else:
