@@ -85,7 +85,7 @@ if st.session_state.role == "manager":
         else:
             st.info("Fleet is empty. Please add a vehicle.")
     
-    # 2. MONTHLY SHEET
+    # 2. MONTHLY SHEET & TOTAL SPEND (UPGRADED)
     with t2:
         st.subheader("📅 Monthly Diesel Sheet")
         logs_df = load_data("logs")
@@ -129,7 +129,35 @@ if st.session_state.role == "manager":
         else:
             st.info("No fuel logs recorded yet.")
 
-    # 3. MAINTENANCE (UPGRADED DASHBOARD)
+        # --- NEW: TOTAL SPEND BY VEHICLE ---
+        st.divider()
+        st.subheader("💰 Lifetime Total Spend by Vehicle (Fuel + Repairs)")
+        
+        maint_df_all = load_data("maintenance")
+        spend_data = []
+        
+        if not df.empty and 'plate' in df.columns:
+            for p in df['plate'].unique():
+                f_cost = logs_df[logs_df['plate'] == p]['total_cost'].sum() if (not logs_df.empty and 'total_cost' in logs_df.columns and 'plate' in logs_df.columns) else 0
+                m_cost = maint_df_all[maint_df_all['plate'] == p]['cost'].sum() if (not maint_df_all.empty and 'cost' in maint_df_all.columns and 'plate' in maint_df_all.columns) else 0
+                total = f_cost + m_cost
+                spend_data.append({
+                    "Plate No": p, 
+                    "Total Fuel Cost (₹)": f_cost, 
+                    "Total Repair Cost (₹)": m_cost, 
+                    "GRAND TOTAL SPEND (₹)": total
+                })
+            
+            spend_df = pd.DataFrame(spend_data).sort_values(by="GRAND TOTAL SPEND (₹)", ascending=False)
+            
+            # Formatting to show currency beautifully
+            st.dataframe(spend_df.style.format({
+                "Total Fuel Cost (₹)": "{:,.2f}",
+                "Total Repair Cost (₹)": "{:,.2f}",
+                "GRAND TOTAL SPEND (₹)": "{:,.2f}"
+            }), use_container_width=True, hide_index=True)
+
+    # 3. MAINTENANCE
     with t3:
         st.subheader("🔧 Maintenance & Repairs Log")
         with st.expander("➕ Log New Repair or Service"):
@@ -161,40 +189,64 @@ if st.session_state.role == "manager":
         maint_df = load_data("maintenance")
         
         if not maint_df.empty and 'cost' in maint_df.columns:
-            # A. Grand Total Maintenance Metric
             grand_total_maint = maint_df['cost'].sum()
             st.metric("🛠️ Total Fleet Maintenance Cost", f"₹ {grand_total_maint:,.2f}")
             
-            # B. Vehicle-Wise Maintenance Sheet
             st.write("#### 🚌 Vehicle-Wise Maintenance Sheet")
             maint_summary = maint_df.groupby('plate').agg(
-                Total_Repairs=('work_type', 'count'),
-                Total_Cost=('cost', 'sum')
+                Total_Repairs=('work_type', 'count'), Total_Cost=('cost', 'sum')
             ).reset_index()
-            
             maint_summary.rename(columns={'plate': 'Plate No', 'Total_Repairs': 'Number of Services', 'Total_Cost': 'Total Cost (₹)'}, inplace=True)
             maint_summary = maint_summary.sort_values(by="Total Cost (₹)", ascending=False)
-            
             st.dataframe(maint_summary, use_container_width=True, hide_index=True)
             
-            csv_maint_sum = maint_summary.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Summary Sheet", data=csv_maint_sum, file_name="Akshara_Maintenance_Summary.csv", mime="text/csv")
-            
             st.divider()
-            
-            # C. Detailed History
             st.write("#### 🧾 Detailed Repair History")
             st.dataframe(maint_df[['date', 'plate', 'work_type', 'cost', 'notes', 'odo']].sort_values(by="date", ascending=False), use_container_width=True, hide_index=True)
-            
-            csv_maint_hist = maint_df[['date', 'plate', 'work_type', 'cost', 'notes', 'odo']].to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Detailed History", data=csv_maint_hist, file_name="Akshara_Maintenance_History.csv", mime="text/csv")
         else:
             st.info("No maintenance records logged yet.")
 
-    # 4. MANAGER CORRECTION CENTER
+    # 4. MANAGER CORRECTION CENTER (UPGRADED)
     with t4:
-        st.subheader("✏️ Data Correction Center")
+        st.subheader("✏️ Data Correction & Manual Entry")
         
+        # --- NEW: MANUAL FUEL ENTRY FOR MANAGER ---
+        with st.expander("📝 Add Missed Fuel Record (Manager Entry)", expanded=True):
+            st.info("Use this to manually input a past diesel receipt a driver forgot to log.")
+            if not df.empty and 'plate' in df.columns:
+                man_plate = st.selectbox("Select Bus", df['plate'].unique(), key="man_fuel_plate")
+                man_driver = df[df['plate'] == man_plate]['driver'].values[0]
+                
+                c1, c2 = st.columns(2)
+                man_date = c1.date_input("Date of Fill-up", datetime.today())
+                man_km = c2.number_input("Trip KM Run", min_value=0, value=0)
+                
+                c3, c4 = st.columns(2)
+                man_liters = c3.number_input("Liters Filled", min_value=0.0, value=0.0)
+                man_rate = c4.number_input("Rate per Liter (₹)", min_value=0.0, value=0.0)
+                
+                if st.button("Save Missed Fuel Record"):
+                    if man_liters > 0 and man_rate > 0:
+                        man_cost = man_liters * man_rate
+                        man_mil = round(man_km / man_liters, 2)
+                        
+                        try:
+                            supabase.table("logs").insert({
+                                "plate": man_plate, "driver": man_driver, "km_run": int(man_km),
+                                "liters": float(man_liters), "mileage": float(man_mil),
+                                "rate_per_ltr": float(man_rate), "total_cost": float(man_cost),
+                                "date": man_date.strftime("%Y-%m-%d %H:%M:%S") # Uses the exact date selected!
+                            }).execute()
+                            st.success(f"Fuel log added for {man_plate} on {man_date}!"); st.rerun()
+                        except Exception as e:
+                            st.error(f"Error saving: {e}")
+                    else:
+                        st.error("Please enter both Liters and the Rate per Liter.")
+            else:
+                st.info("Add a vehicle to the fleet first.")
+
+        st.divider()
+
         # A. Edit Fleet 
         with st.expander("🚌 Manage Fleet (Add / Edit / Delete Buses)"):
             action = st.radio("Action:", ["Add New Bus", "Edit Driver Name", "Delete Bus"], horizontal=True)
@@ -202,13 +254,12 @@ if st.session_state.role == "manager":
                 p_n = st.text_input("Plate No").upper().strip()
                 d_n = st.text_input("Driver Name").upper().strip()
                 start_meter = st.number_input("Starting Odometer (VERY IMPORTANT)", min_value=0, value=0)
-                
                 if st.button("Save to Fleet"):
                     supabase.table("vehicles").upsert({
                         "plate": p_n, "driver": d_n, "odo": int(start_meter), 
                         "trip_km": int(start_meter), "fuel_liters": 0.0
                     }).execute()
-                    st.success("Added with correct starting meter!"); st.rerun()
+                    st.success("Added!"); st.rerun()
             elif action == "Edit Driver Name":
                 if not df.empty and 'plate' in df.columns:
                     target_edit = st.selectbox("Select Bus", df['plate'].unique(), key="edit_driver")
@@ -217,16 +268,12 @@ if st.session_state.role == "manager":
                     if st.button("Update Driver"):
                         supabase.table("vehicles").update({"driver": new_driver}).eq("plate", target_edit).execute()
                         st.success("Updated!"); st.rerun()
-                else:
-                    st.info("No buses available to edit.")
             elif action == "Delete Bus":
                 if not df.empty and 'plate' in df.columns:
                     target_del = st.selectbox("Select Bus", df['plate'].unique(), key="del_bus")
                     if st.button("Delete Permanently"):
                         supabase.table("vehicles").delete().eq("plate", target_del).execute()
                         st.success("Deleted!"); st.rerun()
-                else:
-                    st.info("No buses available to delete.")
 
         # B. Correct Live Odometer
         with st.expander("⏱️ Correct a Live Odometer"):
@@ -237,8 +284,6 @@ if st.session_state.role == "manager":
                 if st.button("Force Update Odometer"):
                     supabase.table("vehicles").update({"odo": int(new_odo_val)}).eq("plate", target_odo).execute()
                     st.success("Odometer Corrected!"); st.rerun()
-            else:
-                st.info("No vehicles currently in the fleet.")
 
         # C. Correct Fuel Logs
         with st.expander("⛽ Correct a Past Fuel Fill-up Log"):
@@ -263,13 +308,11 @@ if st.session_state.role == "manager":
                         "km_run": fix_km, "liters": fix_liters, "rate_per_ltr": fix_rate,
                         "mileage": new_mileage, "total_cost": new_cost
                     }).eq("id", int(selected_log_id)).execute()
-                    st.success("Fuel Log Corrected! Monthly sheet updated."); st.rerun()
+                    st.success("Fuel Log Corrected!"); st.rerun()
                 
                 if st.button("🗑️ Delete this Fuel Entry"):
                     supabase.table("logs").delete().eq("id", int(selected_log_id)).execute()
                     st.success("Entry Deleted!"); st.rerun()
-            else:
-                st.info("No fuel logs available to correct.")
 
         # D. Correct Maintenance
         with st.expander("🔧 Correct a Maintenance Record"):
@@ -294,8 +337,6 @@ if st.session_state.role == "manager":
                 if st.button("🗑️ Delete this Repair Entry"):
                     supabase.table("maintenance").delete().eq("id", int(selected_m_id)).execute()
                     st.success("Repair Deleted!"); st.rerun()
-            else:
-                st.info("No maintenance records available to correct.")
 
     # 5. BACKUPS & 6. DANGER
     with t5:
@@ -307,27 +348,18 @@ if st.session_state.role == "manager":
         st.error("⚠️ MASTER RESET - FACTORY WIPE")
         st.write("This will permanently erase ALL vehicles, ALL monthly fuel logs, and ALL maintenance history.")
         confirm_reset = st.text_input("Type 'RESET ALL' to confirm your action:")
-        
         if st.button("🚨 ERASE ENTIRE SYSTEM"):
             if confirm_reset == "RESET ALL":
                 trigger_auto_backup("Emergency Backup before Factory Wipe")
-                
                 if not df.empty and 'plate' in df.columns:
-                    for p in df['plate'].unique(): 
-                        supabase.table("vehicles").delete().eq("plate", p).execute()
-                
+                    for p in df['plate'].unique(): supabase.table("vehicles").delete().eq("plate", p).execute()
                 logs_df_wipe = load_data("logs")
                 if not logs_df_wipe.empty and 'id' in logs_df_wipe.columns:
-                    for l_id in logs_df_wipe['id'].unique():
-                        supabase.table("logs").delete().eq("id", int(l_id)).execute()
-                        
+                    for l_id in logs_df_wipe['id'].unique(): supabase.table("logs").delete().eq("id", int(l_id)).execute()
                 maint_df_wipe = load_data("maintenance")
                 if not maint_df_wipe.empty and 'id' in maint_df_wipe.columns:
-                    for m_id in maint_df_wipe['id'].unique():
-                        supabase.table("maintenance").delete().eq("id", int(m_id)).execute()
-
-                st.success("FACTORY RESET COMPLETE! Live data, Monthly sheets, and Maintenance are all completely empty.")
-                st.rerun()
+                    for m_id in maint_df_wipe['id'].unique(): supabase.table("maintenance").delete().eq("id", int(m_id)).execute()
+                st.success("FACTORY RESET COMPLETE!"); st.rerun()
             else:
                 st.error("You must type 'RESET ALL' exactly in the box above before clicking the button.")
 
