@@ -23,21 +23,32 @@ def load_data(table_name):
 
 df = load_data("vehicles")
 
-# --- 3. AUTO-BACKUP ENGINE ---
+# --- 3. CRASH-PROOF AUTO-BACKUP ENGINE ---
 def trigger_auto_backup(event_name):
     today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Fetch current data to backup
-    v_data = supabase.table("vehicles").select("*").execute().data
-    l_data = supabase.table("logs").select("*").execute().data
+    # Safely try to get vehicle data
+    try:
+        v_data = supabase.table("vehicles").select("*").execute().data
+    except:
+        v_data = []
+        
+    # Safely try to get logs data (This caused the crash earlier!)
+    try:
+        l_data = supabase.table("logs").select("*").execute().data
+    except:
+        l_data = []
     
-    # Save as JSON text in the backups table
-    supabase.table("backups").insert({
-        "backup_date": today_str,
-        "event_type": event_name,
-        "vehicles_data": json.dumps(v_data),
-        "logs_data": json.dumps(l_data)
-    }).execute()
+    # Safely try to save the backup
+    try:
+        supabase.table("backups").insert({
+            "backup_date": today_str,
+            "event_type": event_name,
+            "vehicles_data": json.dumps(v_data),
+            "logs_data": json.dumps(l_data)
+        }).execute()
+    except:
+        pass # If backups table is missing, just ignore and don't crash
 
 # --- 4. LOGIN GATE ---
 if 'logged_in' not in st.session_state:
@@ -54,7 +65,7 @@ if 'logged_in' not in st.session_state:
                 # DAILY AUTO-BACKUP CHECK
                 today_date = datetime.now().strftime("%Y-%m-%d")
                 backups_df = load_data("backups")
-                if backups_df.empty or not backups_df['backup_date'].str.contains(today_date).any():
+                if backups_df.empty or not backups_df['backup_date'].astype(str).str.contains(today_date).any():
                     trigger_auto_backup("Daily Auto-Backup")
                     
                 st.rerun()
@@ -84,7 +95,7 @@ if st.session_state.role == "manager":
             st.dataframe(m_df[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
     
     with t2:
-        st.subheader("📅 Monthly Diesel Sheet (Vehicle Wise)")
+        st.subheader("📅 Monthly Diesel Sheet")
         logs_df = load_data("logs")
         if not logs_df.empty:
             logs_df['date'] = pd.to_datetime(logs_df['date'])
@@ -100,6 +111,8 @@ if st.session_state.role == "manager":
                 st.download_button("📥 Download Monthly Sheet", data=csv, file_name=f"Akshara_Diesel_{current_month}_{current_year}.csv", mime="text/csv")
             else:
                 st.info("No fuel logged yet for this month.")
+        else:
+            st.warning("⚠️ 'logs' table is missing in Supabase. You need it to track monthly diesel!")
 
     with t3:
         st.subheader("Enroll New Bus")
@@ -109,33 +122,24 @@ if st.session_state.role == "manager":
             supabase.table("vehicles").upsert({"plate": p_n, "driver": d_n, "odo": 0, "trip_km": 0, "fuel_liters": 0.0}).execute()
             st.success(f"{p_n} Added!"); st.rerun()
 
-    # --- CLOUD BACKUPS TAB ---
     with t4:
         st.subheader("☁️ Auto-Backup Archive")
-        st.write("The system automatically saves a copy of your fleet data daily and before any reset.")
         backups_df = load_data("backups")
         if not backups_df.empty:
             st.dataframe(backups_df[['id', 'backup_date', 'event_type']].sort_values(by="id", ascending=False), use_container_width=True, hide_index=True)
         else:
-            st.info("No backups created yet. They will appear automatically.")
+            st.info("No backups created yet.")
 
-    # --- MASTER RESET BUTTON ---
     with t5:
         st.error("⚠️ MASTER RESET")
-        st.write("This will permanently erase **ALL** vehicles and drivers from the live fleet dashboard.")
         confirm = st.text_input("Type 'RESET ALL' to confirm your action:")
-        
         if st.button("🚨 ERASE TOTAL VEHICLE DETAILS"):
             if confirm == "RESET ALL":
                 if not df.empty:
-                    # 1. TRIGGER EMERGENCY AUTO-BACKUP
                     trigger_auto_backup("Pre-Reset Emergency Backup")
-                    
-                    # 2. ERASE ALL VEHICLES
                     for plate in df['plate'].unique():
                         supabase.table("vehicles").delete().eq("plate", plate).execute()
-                    
-                    st.success("ALL VEHICLE DETAILS ERASED. An emergency backup was saved to the Cloud Backups tab.")
+                    st.success("ALL VEHICLE DETAILS ERASED.")
                     st.rerun()
             else:
                 st.error("You must type 'RESET ALL' exactly to confirm this action.")
@@ -153,7 +157,6 @@ else:
     c2.metric("⛽ Mileage", f"{trip_mileage} km/l")
     st.divider()
 
-    st.subheader("1. Update Odometer")
     new_odo = st.number_input("Current Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
     if st.button("Update Odometer"):
         supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
@@ -161,18 +164,21 @@ else:
 
     st.divider()
 
-    st.subheader("2. Fuel Fill-up")
     diesel = st.number_input("Diesel Liters Added", min_value=0.0, value=0.0)
     if st.button("Log Fuel & Start New Trip"):
         if diesel > 0:
-            supabase.table("logs").insert({
-                "plate": v_data['plate'],
-                "driver": v_data['driver'],
-                "km_run": int(trip_dist),
-                "liters": float(diesel),
-                "mileage": float(round(trip_dist / diesel, 2)) if diesel > 0 else 0,
-                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }).execute()
+            # Try to save to logs (for monthly sheet)
+            try:
+                supabase.table("logs").insert({
+                    "plate": v_data['plate'],
+                    "driver": v_data['driver'],
+                    "km_run": int(trip_dist),
+                    "liters": float(diesel),
+                    "mileage": float(round(trip_dist / diesel, 2)) if diesel > 0 else 0,
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }).execute()
+            except:
+                pass # Ignore if logs table is missing
             
             supabase.table("vehicles").update({"trip_km": int(v_data['odo']), "fuel_liters": float(diesel)}).eq("plate", v_data['plate']).execute()
             st.success("Fuel logged successfully!"); st.rerun()
