@@ -89,7 +89,7 @@ if st.session_state.role == "manager":
         else:
             st.info("Fleet is empty. Please add a vehicle.")
 
-    # 2. LOG FUEL
+    # 2. LOG FUEL 
     with t2:
         st.subheader("⛽ Log Diesel Fill-up")
         st.write("Drivers update the meter on their phones. You enter the diesel bills here.")
@@ -105,11 +105,11 @@ if st.session_state.role == "manager":
             st.info(f"**Driver:** {f_driver} | **Current Meter:** {f_current_odo} km | **Trip Distance:** {f_trip_km} km")
 
             c1, c2, c3 = st.columns(3)
-            f_date = c1.date_input("Date of Fill-up", datetime.today())
-            f_liters = c2.number_input("Liters Filled", min_value=0.0, value=0.0)
-            f_rate = c3.number_input("Rate per Liter (₹)", min_value=0.0, value=0.0)
+            f_date = c1.date_input("Date of Fill-up", datetime.today(), key="primary_fill_date")
+            f_liters = c2.number_input("Liters Filled", min_value=0.0, value=0.0, key="primary_liters")
+            f_rate = c3.number_input("Rate per Liter (₹)", min_value=0.0, value=0.0, key="primary_rate")
 
-            f_manual_km = st.number_input("Trip KM Run (Auto-calculated, change only if driver made a mistake)", value=int(f_trip_km))
+            f_manual_km = st.number_input("Trip KM Run (Auto-calculated, change only if driver made a mistake)", value=int(f_trip_km), key="primary_km")
 
             if st.button("Save Diesel Record"):
                 if f_liters > 0 and f_rate > 0:
@@ -215,14 +215,14 @@ if st.session_state.role == "manager":
                 current_v_odo = int(df[df['plate'] == m_plate]['odo'].values[0])
                 
                 c1, c2 = st.columns(2)
-                m_date = c1.date_input("Date of Service", datetime.today()) 
+                m_date = c1.date_input("Date of Service", datetime.today(), key="maint_date") 
                 m_type = c2.selectbox("Type of Work", ["Oil Change", "Mechanical Repair", "Electrical Repair", "Tyre Replacement", "Body Work", "Other"])
                 
                 c3, c4 = st.columns(2)
-                m_cost = c3.number_input("Total Repair Bill (₹)", min_value=0.0, value=0.0)
-                m_odo = c4.number_input("Odometer at time of service", value=current_v_odo)
+                m_cost = c3.number_input("Total Repair Bill (₹)", min_value=0.0, value=0.0, key="maint_cost")
+                m_odo = c4.number_input("Odometer at time of service", value=current_v_odo, key="maint_odo")
                 
-                m_notes = st.text_input("Details (e.g., Replaced battery, Engine oil brand)")
+                m_notes = st.text_input("Details (e.g., Replaced battery, Engine oil brand)", key="maint_notes")
                 
                 if st.button("Save Maintenance Record"):
                     supabase.table("maintenance").insert({
@@ -265,12 +265,13 @@ if st.session_state.role == "manager":
                 man_driver = df[df['plate'] == man_plate]['driver'].values[0]
                 
                 c1, c2 = st.columns(2)
-                man_date = c1.date_input("Date of Fill-up", datetime.today())
-                man_km = c2.number_input("Trip KM Run", min_value=0, value=0)
+                # UNIQUE KEYS ADDED HERE TO FIX THE ERROR
+                man_date = c1.date_input("Date of Fill-up", datetime.today(), key="missed_fuel_date")
+                man_km = c2.number_input("Trip KM Run", min_value=0, value=0, key="missed_fuel_km")
                 
                 c3, c4 = st.columns(2)
-                man_liters = c3.number_input("Liters Filled", min_value=0.0, value=0.0)
-                man_rate = c4.number_input("Rate per Liter (₹)", min_value=0.0, value=0.0)
+                man_liters = c3.number_input("Liters Filled", min_value=0.0, value=0.0, key="missed_fuel_liters")
+                man_rate = c4.number_input("Rate per Liter (₹)", min_value=0.0, value=0.0, key="missed_fuel_rate")
                 
                 if st.button("Save Missed Fuel Record"):
                     if man_liters > 0 and man_rate > 0:
@@ -296,12 +297,13 @@ if st.session_state.role == "manager":
         with st.expander("🚌 Manage Fleet (Add / Edit / Delete Buses)"):
             action = st.radio("Action:", ["Add New Bus", "Edit Driver Name", "Delete Bus"], horizontal=True)
             if action == "Add New Bus":
-                p_n = st.text_input("Plate No").upper().strip()
-                d_n = st.text_input("Driver Name").upper().strip()
+                p_n = st.text_input("Plate No", key="add_bus_plate").upper().strip()
+                d_n = st.text_input("Driver Name", key="add_bus_driver").upper().strip()
                 
                 c1, c2 = st.columns(2)
-                start_meter = c1.number_input("Starting Odometer (VERY IMPORTANT)", min_value=0, value=0)
-                start_date = c2.date_input("Date of Entry", datetime.today())
+                # UNIQUE KEYS ADDED HERE
+                start_meter = c1.number_input("Starting Odometer (VERY IMPORTANT)", min_value=0, value=0, key="add_bus_odo")
+                start_date = c2.date_input("Date of Entry", datetime.today(), key="add_bus_date")
                 
                 if st.button("Save to Fleet"):
                     try:
@@ -318,7 +320,7 @@ if st.session_state.role == "manager":
                 if not df.empty and 'plate' in df.columns:
                     target_edit = st.selectbox("Select Bus", df['plate'].unique(), key="edit_driver")
                     curr_driver = df[df['plate'] == target_edit]['driver'].values[0]
-                    new_driver = st.text_input("Update Driver", value=curr_driver).upper().strip()
+                    new_driver = st.text_input("Update Driver", value=curr_driver, key="update_driver_name").upper().strip()
                     if st.button("Update Driver"):
                         supabase.table("vehicles").update({"driver": new_driver}).eq("plate", target_edit).execute()
                         st.success("Updated!"); st.rerun()
@@ -333,7 +335,7 @@ if st.session_state.role == "manager":
             if not df.empty and 'plate' in df.columns:
                 target_odo = st.selectbox("Select Bus", df['plate'].unique(), key="edit_odo")
                 curr_odo = df[df['plate'] == target_odo]['odo'].values[0]
-                new_odo_val = st.number_input("Correct Odometer Reading", value=int(curr_odo))
+                new_odo_val = st.number_input("Correct Odometer Reading", value=int(curr_odo), key="force_odo_update")
                 if st.button("Force Update Odometer"):
                     supabase.table("vehicles").update({"odo": int(new_odo_val)}).eq("plate", target_odo).execute()
                     st.success("Odometer Corrected!"); st.rerun()
@@ -344,14 +346,14 @@ if st.session_state.role == "manager":
                 c_logs_df['label'] = c_logs_df['date'].astype(str) + " | " + c_logs_df['plate'] + " | " + c_logs_df['liters'].astype(str) + "L"
                 log_map = dict(zip(c_logs_df['label'], c_logs_df['id']))
                 
-                selected_log_label = st.selectbox("Select Fuel Entry to Fix", c_logs_df['label'].tolist())
+                selected_log_label = st.selectbox("Select Fuel Entry to Fix", c_logs_df['label'].tolist(), key="fix_fuel_entry")
                 selected_log_id = log_map[selected_log_label]
                 log_data = c_logs_df[c_logs_df['id'] == selected_log_id].iloc[0]
                 
                 c1, c2, c3 = st.columns(3)
-                fix_km = c1.number_input("Fix KM Run", value=int(log_data['km_run']))
-                fix_liters = c2.number_input("Fix Liters", value=float(log_data['liters']))
-                fix_rate = c3.number_input("Fix Rate (₹)", value=float(log_data.get('rate_per_ltr', 0.0)))
+                fix_km = c1.number_input("Fix KM Run", value=int(log_data['km_run']), key="fix_fuel_km")
+                fix_liters = c2.number_input("Fix Liters", value=float(log_data['liters']), key="fix_fuel_liters")
+                fix_rate = c3.number_input("Fix Rate (₹)", value=float(log_data.get('rate_per_ltr', 0.0)), key="fix_fuel_rate")
                 
                 if st.button("Update Fuel Record"):
                     new_mileage = round(fix_km / fix_liters, 2) if fix_liters > 0 else 0
@@ -372,12 +374,12 @@ if st.session_state.role == "manager":
                 c_maint_df['label'] = c_maint_df['date'].astype(str) + " | " + c_maint_df['plate'] + " | " + c_maint_df['work_type']
                 maint_map = dict(zip(c_maint_df['label'], c_maint_df['id']))
                 
-                selected_m_label = st.selectbox("Select Repair Entry to Fix", c_maint_df['label'].tolist())
+                selected_m_label = st.selectbox("Select Repair Entry to Fix", c_maint_df['label'].tolist(), key="fix_maint_entry")
                 selected_m_id = maint_map[selected_m_label]
                 m_data = c_maint_df[c_maint_df['id'] == selected_m_id].iloc[0]
                 
-                fix_m_cost = st.number_input("Fix Cost (₹)", value=float(m_data['cost']))
-                fix_m_notes = st.text_input("Fix Notes", value=str(m_data['notes']))
+                fix_m_cost = st.number_input("Fix Cost (₹)", value=float(m_data['cost']), key="fix_maint_cost")
+                fix_m_notes = st.text_input("Fix Notes", value=str(m_data['notes']), key="fix_maint_notes")
                 
                 if st.button("Update Maintenance Record"):
                     supabase.table("maintenance").update({
@@ -398,7 +400,7 @@ if st.session_state.role == "manager":
     with t7:
         st.error("⚠️ MASTER RESET - FACTORY WIPE")
         st.write("This will permanently erase ALL vehicles, ALL monthly fuel logs, and ALL maintenance history.")
-        confirm_reset = st.text_input("Type 'RESET ALL' to confirm your action:")
+        confirm_reset = st.text_input("Type 'RESET ALL' to confirm your action:", key="factory_reset_input")
         if st.button("🚨 ERASE ENTIRE SYSTEM"):
             if confirm_reset == "RESET ALL":
                 trigger_auto_backup("Emergency Backup before Factory Wipe")
@@ -414,17 +416,15 @@ if st.session_state.role == "manager":
             else:
                 st.error("You must type 'RESET ALL' exactly in the box above before clicking the button.")
 
-# --- 6. DRIVER INTERFACE (WITH MILEAGE INDICATOR) ---
+# --- 6. DRIVER INTERFACE ---
 else:
     st.markdown(f'<h2 style="color:#000080;text-align:center;">👋 Welcome, {st.session_state.user}</h2>', unsafe_allow_html=True)
     v_data = df[df['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
     
     st.info("📌 **Instructions:** Please update your current meter reading at the end of your trip or when filling diesel. Hand over the physical diesel bill to the Manager.")
     
-    # Calculate unlogged trip distance
     current_trip_dist = int(v_data['odo']) - int(v_data['trip_km'])
     
-    # Fetch the last recorded mileage from the logs table safely
     last_mileage = 0.0
     try:
         past_logs = supabase.table("logs").select("mileage, date").eq("plate", v_data['plate']).order("date", desc=True).limit(1).execute().data
@@ -439,8 +439,8 @@ else:
     c3.metric("⛽ Last Mileage", f"{last_mileage} km/l")
     st.divider()
 
-    new_odo = st.number_input("Update New Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']))
-    if st.button("Update Odometer"):
+    new_odo = st.number_input("Update New Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']), key="driver_odo_input")
+    if st.button("Update Odometer", key="driver_odo_btn"):
         supabase.table("vehicles").update({"odo": int(new_odo)}).eq("plate", v_data['plate']).execute()
         st.success("✅ Odometer updated! The Manager will handle the diesel entry."); st.rerun()
 
