@@ -81,11 +81,15 @@ if st.session_state.role == "manager":
             m_df['Mileage'] = m_df['Mileage'].astype(float).round(2)
             def style_mileage(v): return 'color: green; font-weight: bold' if v > 12 else 'color: red'
             
-            st.dataframe(m_df[['plate', 'driver', 'odo', 'Trip KM', 'Mileage']].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
+            display_cols_live = ['plate', 'driver', 'odo', 'Trip KM', 'Mileage']
+            if 'start_date' in m_df.columns:
+                display_cols_live.insert(2, 'start_date')
+                
+            st.dataframe(m_df[display_cols_live].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
         else:
             st.info("Fleet is empty. Please add a vehicle.")
     
-    # 2. MONTHLY SHEET & TOTAL SPEND (UPGRADED)
+    # 2. MONTHLY SHEET & TOTAL SPEND
     with t2:
         st.subheader("📅 Monthly Diesel Sheet")
         logs_df = load_data("logs")
@@ -129,7 +133,7 @@ if st.session_state.role == "manager":
         else:
             st.info("No fuel logs recorded yet.")
 
-        # --- NEW: TOTAL SPEND BY VEHICLE ---
+        # TOTAL SPEND BY VEHICLE
         st.divider()
         st.subheader("💰 Lifetime Total Spend by Vehicle (Fuel + Repairs)")
         
@@ -149,8 +153,6 @@ if st.session_state.role == "manager":
                 })
             
             spend_df = pd.DataFrame(spend_data).sort_values(by="GRAND TOTAL SPEND (₹)", ascending=False)
-            
-            # Formatting to show currency beautifully
             st.dataframe(spend_df.style.format({
                 "Total Fuel Cost (₹)": "{:,.2f}",
                 "Total Repair Cost (₹)": "{:,.2f}",
@@ -206,12 +208,11 @@ if st.session_state.role == "manager":
         else:
             st.info("No maintenance records logged yet.")
 
-    # 4. MANAGER CORRECTION CENTER (UPGRADED)
+    # 4. MANAGER CORRECTION CENTER
     with t4:
         st.subheader("✏️ Data Correction & Manual Entry")
         
-        # --- NEW: MANUAL FUEL ENTRY FOR MANAGER ---
-        with st.expander("📝 Add Missed Fuel Record (Manager Entry)", expanded=True):
+        with st.expander("📝 Add Missed Fuel Record (Manager Entry)"):
             st.info("Use this to manually input a past diesel receipt a driver forgot to log.")
             if not df.empty and 'plate' in df.columns:
                 man_plate = st.selectbox("Select Bus", df['plate'].unique(), key="man_fuel_plate")
@@ -229,13 +230,12 @@ if st.session_state.role == "manager":
                     if man_liters > 0 and man_rate > 0:
                         man_cost = man_liters * man_rate
                         man_mil = round(man_km / man_liters, 2)
-                        
                         try:
                             supabase.table("logs").insert({
                                 "plate": man_plate, "driver": man_driver, "km_run": int(man_km),
                                 "liters": float(man_liters), "mileage": float(man_mil),
                                 "rate_per_ltr": float(man_rate), "total_cost": float(man_cost),
-                                "date": man_date.strftime("%Y-%m-%d %H:%M:%S") # Uses the exact date selected!
+                                "date": man_date.strftime("%Y-%m-%d %H:%M:%S")
                             }).execute()
                             st.success(f"Fuel log added for {man_plate} on {man_date}!"); st.rerun()
                         except Exception as e:
@@ -247,19 +247,29 @@ if st.session_state.role == "manager":
 
         st.divider()
 
-        # A. Edit Fleet 
-        with st.expander("🚌 Manage Fleet (Add / Edit / Delete Buses)"):
+        # A. Edit Fleet (UPDATED WITH DATE OF ENTRY)
+        with st.expander("🚌 Manage Fleet (Add / Edit / Delete Buses)", expanded=True):
             action = st.radio("Action:", ["Add New Bus", "Edit Driver Name", "Delete Bus"], horizontal=True)
             if action == "Add New Bus":
                 p_n = st.text_input("Plate No").upper().strip()
                 d_n = st.text_input("Driver Name").upper().strip()
-                start_meter = st.number_input("Starting Odometer (VERY IMPORTANT)", min_value=0, value=0)
+                
+                # --- NEW: SIDE-BY-SIDE METERS AND DATE ---
+                c1, c2 = st.columns(2)
+                start_meter = c1.number_input("Starting Odometer (VERY IMPORTANT)", min_value=0, value=0)
+                start_date = c2.date_input("Date of Entry", datetime.today())
+                
                 if st.button("Save to Fleet"):
-                    supabase.table("vehicles").upsert({
-                        "plate": p_n, "driver": d_n, "odo": int(start_meter), 
-                        "trip_km": int(start_meter), "fuel_liters": 0.0
-                    }).execute()
-                    st.success("Added!"); st.rerun()
+                    try:
+                        supabase.table("vehicles").upsert({
+                            "plate": p_n, "driver": d_n, "odo": int(start_meter), 
+                            "trip_km": int(start_meter), "fuel_liters": 0.0,
+                            "start_date": start_date.strftime("%Y-%m-%d")
+                        }).execute()
+                        st.success(f"Added successfully with start date {start_date}!"); st.rerun()
+                    except Exception as e:
+                        st.error("⚠️ Please add a 'start_date' column (Type: text) to your 'vehicles' table in Supabase first!")
+            
             elif action == "Edit Driver Name":
                 if not df.empty and 'plate' in df.columns:
                     target_edit = st.selectbox("Select Bus", df['plate'].unique(), key="edit_driver")
