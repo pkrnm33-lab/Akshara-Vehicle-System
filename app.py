@@ -76,16 +76,16 @@ if st.session_state.role == "manager":
         if not df.empty and 'plate' in df.columns:
             m_df = df.copy()
             m_df['Trip KM'] = m_df['odo'] - m_df['trip_km']
-            m_df['Mileage'] = m_df.apply(lambda x: round(x['Trip KM'] / x['fuel_liters'], 2) if x['fuel_liters'] > 0 else 0, axis=1)
+            m_df['Mileage'] = m_df.apply(lambda x: round(x['Trip KM'] / float(x['fuel_liters']), 2) if float(x['fuel_liters']) > 0 else 0.0, axis=1)
             
-            m_df['Mileage'] = m_df['Mileage'].astype(float).round(2)
-            def style_mileage(v): return 'color: green; font-weight: bold' if v > 12 else 'color: red'
+            def style_mileage(v): return 'color: green; font-weight: bold' if float(v) > 12 else 'color: red'
             
             display_cols_live = ['plate', 'driver', 'odo', 'Trip KM', 'Mileage']
             if 'start_date' in m_df.columns:
                 display_cols_live.insert(2, 'start_date')
                 
-            st.dataframe(m_df[display_cols_live].style.map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
+            # Fixed the long decimal formatting here!
+            st.dataframe(m_df[display_cols_live].style.format({"Mileage": "{:.2f}"}).map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
         else:
             st.info("Fleet is empty. Please add a vehicle.")
 
@@ -265,7 +265,6 @@ if st.session_state.role == "manager":
                 man_driver = df[df['plate'] == man_plate]['driver'].values[0]
                 
                 c1, c2 = st.columns(2)
-                # UNIQUE KEYS ADDED HERE TO FIX THE ERROR
                 man_date = c1.date_input("Date of Fill-up", datetime.today(), key="missed_fuel_date")
                 man_km = c2.number_input("Trip KM Run", min_value=0, value=0, key="missed_fuel_km")
                 
@@ -301,7 +300,6 @@ if st.session_state.role == "manager":
                 d_n = st.text_input("Driver Name", key="add_bus_driver").upper().strip()
                 
                 c1, c2 = st.columns(2)
-                # UNIQUE KEYS ADDED HERE
                 start_meter = c1.number_input("Starting Odometer (VERY IMPORTANT)", min_value=0, value=0, key="add_bus_odo")
                 start_date = c2.date_input("Date of Entry", datetime.today(), key="add_bus_date")
                 
@@ -416,27 +414,21 @@ if st.session_state.role == "manager":
             else:
                 st.error("You must type 'RESET ALL' exactly in the box above before clicking the button.")
 
-# --- 6. DRIVER INTERFACE ---
+# --- 6. DRIVER INTERFACE (SYNCED WITH MANAGER DASHBOARD) ---
 else:
     st.markdown(f'<h2 style="color:#000080;text-align:center;">👋 Welcome, {st.session_state.user}</h2>', unsafe_allow_html=True)
     v_data = df[df['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
     
     st.info("📌 **Instructions:** Please update your current meter reading at the end of your trip or when filling diesel. Hand over the physical diesel bill to the Manager.")
     
+    # Calculate Live Trip Distance & Live Mileage to match Manager View exactly!
     current_trip_dist = int(v_data['odo']) - int(v_data['trip_km'])
-    
-    last_mileage = 0.0
-    try:
-        past_logs = supabase.table("logs").select("mileage, date").eq("plate", v_data['plate']).order("date", desc=True).limit(1).execute().data
-        if past_logs and len(past_logs) > 0:
-            last_mileage = float(past_logs[0]['mileage'])
-    except Exception:
-        pass
+    live_mileage = round(current_trip_dist / float(v_data['fuel_liters']), 2) if float(v_data['fuel_liters']) > 0 else 0.0
 
     c1, c2, c3 = st.columns(3)
     c1.metric("📌 Odometer", f"{v_data['odo']} km")
     c2.metric("🛣️ Current Trip", f"{current_trip_dist} km")
-    c3.metric("⛽ Last Mileage", f"{last_mileage} km/l")
+    c3.metric("⛽ Live Mileage", f"{live_mileage} km/l")
     st.divider()
 
     new_odo = st.number_input("Update New Meter Reading", min_value=float(v_data['odo']), value=float(v_data['odo']), key="driver_odo_input")
