@@ -100,12 +100,15 @@ if st.session_state.role == "manager":
             f_driver = f_v_data['driver']
             f_current_odo = int(f_v_data['odo'])
             f_trip_km = f_current_odo - int(f_v_data['trip_km'])
+            
+            # Grab the liters filled PREVIOUSLY from the database
+            prev_liters = float(f_v_data['fuel_liters'])
 
             st.info(f"**Driver:** {f_driver} | **Current Meter:** {f_current_odo} km | **Trip Distance:** {f_trip_km} km")
 
             c1, c2, c3 = st.columns(3)
             f_date = c1.date_input("Date of Fill-up", datetime.today(), key="primary_fill_date")
-            f_liters = c2.number_input("Liters Filled", min_value=0.0, value=0.0, key="primary_liters")
+            f_liters = c2.number_input("Liters Filled (For NEXT trip)", min_value=0.0, value=0.0, key="primary_liters")
             f_rate = c3.number_input("Rate per Liter (₹)", min_value=0.0, value=0.0, key="primary_rate")
 
             f_manual_km = st.number_input("Trip KM Run (Auto-calculated, change only if driver made a mistake)", value=int(f_trip_km), key="primary_km")
@@ -113,7 +116,10 @@ if st.session_state.role == "manager":
             if st.button("Save Diesel Record"):
                 if f_liters > 0 and f_rate > 0:
                     f_cost = f_liters * f_rate
-                    f_mil = round(f_manual_km / f_liters, 2)
+                    
+                    # --- NEW MATH: KM Run / PREVIOUS Liters ---
+                    f_mil = round(f_manual_km / prev_liters, 2) if prev_liters > 0 else 0.0
+                    
                     try:
                         log_payload = {
                             "plate": f_plate, "driver": f_driver, "km_run": int(f_manual_km),
@@ -124,11 +130,12 @@ if st.session_state.role == "manager":
                         log_payload["odo"] = f_current_odo
                         supabase.table("logs").insert(log_payload).execute()
 
+                        # Save the NEW liters into the database to be used for tomorrow's trip
                         supabase.table("vehicles").update({
                             "trip_km": f_current_odo, "fuel_liters": float(f_liters)
                         }).eq("plate", f_plate).execute()
 
-                        st.success(f"✅ Fuel logged successfully! Total Cost: ₹{f_cost:,.2f}"); st.rerun()
+                        st.success(f"✅ Fuel logged successfully! Mileage: {f_mil} km/l | Total Cost: ₹{f_cost:,.2f}"); st.rerun()
                     except Exception as e:
                         st.error(f"Error saving: {e}")
                 else:
@@ -206,11 +213,10 @@ if st.session_state.role == "manager":
                 "GRAND TOTAL SPEND (₹)": "{:,.2f}"
             }), use_container_width=True, hide_index=True)
 
-        # --- NEW: DETAILED FUEL HISTORY ---
+        # DETAILED FUEL HISTORY 
         st.divider()
         st.subheader("🧾 Detailed Fuel Fill-up History")
         if not logs_df.empty and 'date' in logs_df.columns:
-            # Add a dropdown to filter by a specific bus
             hist_plate = st.selectbox("🔍 Filter History by Vehicle:", ["All Vehicles"] + list(logs_df['plate'].unique()), key="hist_filter")
             
             history_df = logs_df.sort_values(by="date", ascending=False)
@@ -223,7 +229,12 @@ if st.session_state.role == "manager":
                 'liters': 'Diesel (L)', 'mileage': 'Mileage (km/l)', 'rate_per_ltr': 'Rate (₹)', 'total_cost': 'Total Cost (₹)'
             }, inplace=True)
             
-            st.dataframe(display_hist, use_container_width=True, hide_index=True)
+            st.dataframe(display_hist.style.format({
+                "Diesel (L)": "{:.2f}",
+                "Mileage (km/l)": "{:.2f}",
+                "Rate (₹)": "{:.2f}",
+                "Total Cost (₹)": "{:.2f}"
+            }), use_container_width=True, hide_index=True)
             
             csv_hist = display_hist.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download Detailed History", data=csv_hist, file_name=f"Akshara_Fuel_History_{hist_plate}.csv", mime="text/csv")
@@ -300,7 +311,16 @@ if st.session_state.role == "manager":
                 if st.button("Save Missed Fuel Record"):
                     if man_liters > 0 and man_rate > 0:
                         man_cost = man_liters * man_rate
-                        man_mil = round(man_km / man_liters, 2)
+                        
+                        # Fetch the liters filled EXACTLY before this manual date to use for math
+                        try:
+                            prev_log = supabase.table("logs").select("liters").eq("plate", man_plate).lt("date", man_date.strftime("%Y-%m-%d %H:%M:%S")).order("date", desc=True).limit(1).execute().data
+                            prev_liters_man = float(prev_log[0]['liters']) if prev_log else 0.0
+                        except:
+                            prev_liters_man = 0.0
+                            
+                        man_mil = round(man_km / prev_liters_man, 2) if prev_liters_man > 0 else 0.0
+                        
                         try:
                             supabase.table("logs").insert({
                                 "plate": man_plate, "driver": man_driver, "km_run": int(man_km),
@@ -379,7 +399,14 @@ if st.session_state.role == "manager":
                 fix_rate = c3.number_input("Fix Rate (₹)", value=float(log_data.get('rate_per_ltr', 0.0)), key="fix_fuel_rate")
                 
                 if st.button("Update Fuel Record"):
-                    new_mileage = round(fix_km / fix_liters, 2) if fix_liters > 0 else 0
+                    # Find the previous log to recalculate mileage properly
+                    try:
+                        prev_log_corr = supabase.table("logs").select("liters").eq("plate", log_data['plate']).lt("date", log_data['date']).order("date", desc=True).limit(1).execute().data
+                        prev_liters_corr = float(prev_log_corr[0]['liters']) if prev_log_corr else 0.0
+                    except:
+                        prev_liters_corr = 0.0
+                        
+                    new_mileage = round(fix_km / prev_liters_corr, 2) if prev_liters_corr > 0 else 0.0
                     new_cost = fix_liters * fix_rate
                     supabase.table("logs").update({
                         "km_run": fix_km, "liters": fix_liters, "rate_per_ltr": fix_rate,
@@ -439,7 +466,7 @@ if st.session_state.role == "manager":
             else:
                 st.error("You must type 'RESET ALL' exactly in the box above before clicking the button.")
 
-# --- 6. DRIVER INTERFACE (SYNCED WITH MANAGER DASHBOARD) ---
+# --- 6. DRIVER INTERFACE ---
 else:
     st.markdown(f'<h2 style="color:#000080;text-align:center;">👋 Welcome, {st.session_state.user}</h2>', unsafe_allow_html=True)
     v_data = df[df['driver'].str.upper().str.strip() == st.session_state.user].iloc[0]
