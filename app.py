@@ -84,7 +84,6 @@ if st.session_state.role == "manager":
             if 'start_date' in m_df.columns:
                 display_cols_live.insert(2, 'start_date')
                 
-            # Fixed the long decimal formatting here!
             st.dataframe(m_df[display_cols_live].style.format({"Mileage": "{:.2f}"}).map(style_mileage, subset=['Mileage']), use_container_width=True, hide_index=True)
         else:
             st.info("Fleet is empty. Please add a vehicle.")
@@ -137,7 +136,7 @@ if st.session_state.role == "manager":
         else:
             st.info("No vehicles in the fleet.")
     
-    # 3. MONTHLY SHEET & TOTAL SPEND
+    # 3. MONTHLY SHEET & TOTAL SPEND & DETAILED HISTORY
     with t3:
         st.subheader("📅 Monthly Diesel Sheet")
         logs_df = load_data("logs")
@@ -181,6 +180,7 @@ if st.session_state.role == "manager":
         else:
             st.info("No fuel logs recorded yet.")
 
+        # TOTAL SPEND BY VEHICLE
         st.divider()
         st.subheader("💰 Lifetime Total Spend by Vehicle (Fuel + Repairs)")
         
@@ -205,6 +205,31 @@ if st.session_state.role == "manager":
                 "Total Repair Cost (₹)": "{:,.2f}",
                 "GRAND TOTAL SPEND (₹)": "{:,.2f}"
             }), use_container_width=True, hide_index=True)
+
+        # --- NEW: DETAILED FUEL HISTORY ---
+        st.divider()
+        st.subheader("🧾 Detailed Fuel Fill-up History")
+        if not logs_df.empty and 'date' in logs_df.columns:
+            # Add a dropdown to filter by a specific bus
+            hist_plate = st.selectbox("🔍 Filter History by Vehicle:", ["All Vehicles"] + list(logs_df['plate'].unique()), key="hist_filter")
+            
+            history_df = logs_df.sort_values(by="date", ascending=False)
+            if hist_plate != "All Vehicles":
+                history_df = history_df[history_df['plate'] == hist_plate]
+                
+            display_hist = history_df[['date', 'plate', 'driver', 'km_run', 'liters', 'mileage', 'rate_per_ltr', 'total_cost']].copy()
+            display_hist.rename(columns={
+                'date': 'Date', 'plate': 'Plate No', 'driver': 'Driver', 'km_run': 'Trip KM',
+                'liters': 'Diesel (L)', 'mileage': 'Mileage (km/l)', 'rate_per_ltr': 'Rate (₹)', 'total_cost': 'Total Cost (₹)'
+            }, inplace=True)
+            
+            st.dataframe(display_hist, use_container_width=True, hide_index=True)
+            
+            csv_hist = display_hist.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Detailed History", data=csv_hist, file_name=f"Akshara_Fuel_History_{hist_plate}.csv", mime="text/csv")
+        else:
+            st.info("No fuel logs recorded yet.")
+
 
     # 4. MAINTENANCE
     with t4:
@@ -421,7 +446,6 @@ else:
     
     st.info("📌 **Instructions:** Please update your current meter reading at the end of your trip or when filling diesel. Hand over the physical diesel bill to the Manager.")
     
-    # Calculate Live Trip Distance & Live Mileage to match Manager View exactly!
     current_trip_dist = int(v_data['odo']) - int(v_data['trip_km'])
     live_mileage = round(current_trip_dist / float(v_data['fuel_liters']), 2) if float(v_data['fuel_liters']) > 0 else 0.0
 
